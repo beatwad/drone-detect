@@ -1,0 +1,27 @@
+# Project Links
+
+## Datasets (Kaggle)
+- `muki2003/yolo-drone-detection-dataset` — https://www.kaggle.com/datasets/muki2003/yolo-drone-detection-dataset
+  (~1359 images, YOLO-format, multiple angles/altitudes/backgrounds; primary set)
+- `sshikamaru/drone-yolo-detection` — https://www.kaggle.com/datasets/sshikamaru/drone-yolo-detection
+  (secondary YOLO-format set, combined to increase volume)
+
+Pull with: `uv run kaggle datasets download -d <slug> -p data/raw --unzip`
+(needs `~/.kaggle/kaggle.json`, `chmod 600`).
+
+### Candidates (Roboflow Universe)
+Both are several-thousand-image single-class drone sets, export as YOLOv5
+PyTorch TXT (drop straight into pipeline). TODO before merging: check license,
+measure bbox-size (close vs long regime), pHash-dedup against existing data.
+- `project-986i8/drone-uskpc` — https://universe.roboflow.com/project-986i8/drone-uskpc/dataset/1
+- `pauls-workspace-bpzqa/universal-drone-tracker` — https://universe.roboflow.com/pauls-workspace-bpzqa/universal-drone-tracker/dataset/2
+
+## Toolchain
+- FINN (AMD/Xilinx) — https://github.com/Xilinx/finn
+- FINN examples (Tiny-YOLOv3 template) — https://github.com/Xilinx/finn-examples
+- Brevitas — https://github.com/Xilinx/brevitas
+- PYNQ — https://www.pynq.io
+- YOLOv5 (vendored source, v7.0) — https://github.com/ultralytics/yolov5
+
+## Reference (not primary path)
+- Yu-Zhewen Tiny YOLOv3 ZYNQ — https://github.com/Yu-Zhewen/Tiny_YOLO_v3_ZYNQ
