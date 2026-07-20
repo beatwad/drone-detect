@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /home/alex/Repos/drone-detect status)",
+      "Bash(git -C /home/alex/Repos/drone-detect branch -a)"
+    ]
+  }
+}

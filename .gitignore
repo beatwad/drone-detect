@@ -1,0 +1,23 @@
+# --- Python / uv ---
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# --- data & training artifacts ---
+data/
+runs/
+wandb/
+*.pt
+*.pth
+*.onnx
+*.qonnx
+
+# --- Kaggle credentials (never commit) ---
+kaggle.json
+.kaggle/
+
+# --- misc ---
+.DS_Store
+*.log
