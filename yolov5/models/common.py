@@ -682,9 +682,9 @@ class AutoShape(nn.Module):
                 f = f'image{i}'  # filename
                 if isinstance(im, (str, Path)):  # filename or uri
                     im, f = Image.open(requests.get(im, stream=True).raw if str(im).startswith('http') else im), im
-                    im = np.asarray(exif_transpose(im))
+                    im = np.asarray(exif_transpose(im)).copy()  # .copy() -> writable (PIL arrays are read-only)
                 elif isinstance(im, Image.Image):  # PIL Image
-                    im, f = np.asarray(exif_transpose(im)), getattr(im, 'filename', f) or f
+                    im, f = np.asarray(exif_transpose(im)).copy(), getattr(im, 'filename', f) or f
                 files.append(Path(f).with_suffix('.jpg').name)
                 if im.shape[0] < 5:  # image in CHW
                     im = im.transpose((1, 2, 0))  # reverse dataloader .transpose(2, 0, 1)

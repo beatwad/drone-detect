@@ -88,7 +88,11 @@ class Annotator:
         if self.pil or not is_ascii(label):
             self.draw.rectangle(box, width=self.lw, outline=color)  # box
             if label:
-                w, h = self.font.getsize(label)  # text width, height
+                if hasattr(self.font, 'getbbox'):  # Pillow>=10 removed getsize()
+                    l, t, r, b = self.font.getbbox(label)
+                    w, h = r - l, b - t
+                else:
+                    w, h = self.font.getsize(label)  # text width, height
                 outside = box[1] - h >= 0  # label fits outside box
                 self.draw.rectangle(
                     (box[0], box[1] - h if outside else box[1], box[0] + w + 1,
@@ -167,7 +171,11 @@ class Annotator:
     def text(self, xy, text, txt_color=(255, 255, 255), anchor='top'):
         # Add text to image (PIL-only)
         if anchor == 'bottom':  # start y from font bottom
-            w, h = self.font.getsize(text)  # text width, height
+            if hasattr(self.font, 'getbbox'):  # Pillow>=10 removed getsize()
+                l, t, r, b = self.font.getbbox(text)
+                w, h = r - l, b - t
+            else:
+                w, h = self.font.getsize(text)  # text width, height
             xy[1] += 1 - h
         self.draw.text(xy, text, fill=txt_color, font=self.font)
 

@@ -1,1 +1,8 @@
 vendored from https://github.com/ultralytics/yolov5 @ v7.0 (915bbf294bb74c859f0b41f1c23bc395014ea679)
+
+Local patches (deviations from upstream v7.0):
+- utils/plots.py: FreeTypeFont.getsize() -> getbbox() fallback (Pillow>=10
+  removed getsize; box_label + text crashed under Pillow 12).
+- models/common.py: AutoShape Detections images .copy() after
+  np.asarray(exif_transpose(im)) so they are writable (PIL->numpy arrays are
+  read-only; cv2.rectangle in-place draw failed during .render()).
