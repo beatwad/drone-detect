@@ -4,6 +4,7 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .ipynb_checkpoints/
+.env
 
 # --- data & training artifacts ---
 /data/
