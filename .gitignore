@@ -6,10 +6,10 @@ __pycache__/
 .ipynb_checkpoints/
 
 # --- data & training artifacts ---
-data/
+/data/
 data.zip
-runs/
-wandb/
+/runs/
+/wandb/
 *.pt
 *.pth
 *.onnx
