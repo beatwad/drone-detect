@@ -10,8 +10,9 @@ Sources (all single-class `0: drone`):
 Steps: pair image<->label by stem, drop unpaired, collapse Roboflow augmentation
 copies, drop exact-hash duplicates, prefix filenames by source (avoids stem
 collisions), cluster NEAR-duplicates by perceptual hash (video frames differ
-slightly frame-to-frame), then a seeded 80/20 split STRATIFIED by source where
-whole pHash-clusters go to one side only (prevents near-dup train/val leakage).
+slightly frame-to-frame), then a seeded 80/20 split STRATIFIED by source AND by
+regime, where whole pHash-clusters go to one side only (prevents near-dup
+train/val leakage).
 Copy into data/drone/{train,val}/{images,labels}, write configs/drone.yaml + a
 manifest.
 
@@ -176,6 +177,7 @@ def main():
               f"dropped_augcopy={n_aug} dropped_exactdup={len(stems)-kept} -> kept={kept}")
 
     # 2) perceptual-hash near-duplicate clustering (drop unreadable images)
+    #    all near-duplicate videos are grouped into clusters (e.g. all frames from one video)
     print(f"computing pHash for {len(records)} images ...")
     good, dropped_corrupt = [], 0
     for r in records:
@@ -196,14 +198,22 @@ def main():
     n_dup_frames = len(records) - n_clusters
     print(f"pHash clusters: {n_clusters} (grouped {n_dup_frames} near-dup frames)")
 
-    # 3) split by cluster (whole cluster -> one side only, never split: this is
-    #    what prevents near-dup train/val leakage). Clusters routinely SPAN
-    #    sources, since the Roboflow sets re-publish images already in A/B, so we
-    #    take a cluster into val only while every source it touches is still under
+    # 3) split by cluster (whole cluster contains all near-dup images: this is
+    #    what prevents near-dup train/val leakage). So we take a cluster into val 
+    #    only while every group (source, regime) it touches is still under
     #    its own val target. Largest clusters first, so one big video-frame
     #    cluster can't overshoot the target the way first-fit did.
-    per_src_total = Counter(r[1] for r in records)
-    target_val = {s: round(n * args.val_frac) for s, n in per_src_total.items()}
+    def budget_keys(i):
+        """
+        Groups an image counts against: its source AND its regime. Tagged so
+        the two families share one Counter without colliding (e.g. 'C' the source vs
+        'close' the regime). So the result split is roughly stratified against 
+        both source and regime.
+        """
+        return ("src", records[i][1]), ("reg", records[i][2])
+
+    per_group_total = Counter(g for i in range(len(records)) for g in budget_keys(i))
+    target_val = {g: round(n * args.val_frac) for g, n in per_group_total.items()}
     n_val = Counter()
 
     clusters = list(groups.values())
@@ -212,8 +222,8 @@ def main():
 
     assign = {}  # idx -> split
     for c in clusters:
-        comp = Counter(records[i][1] for i in c)
-        if all(n_val[s] + k <= target_val[s] for s, k in comp.items()):
+        comp = Counter(g for i in c for g in budget_keys(i))
+        if all(n_val[g] + k <= target_val[g] for g, k in comp.items()):
             split = "val"
             n_val.update(comp)
         else:
@@ -244,9 +254,8 @@ def main():
         f"nc: 1\nnames:\n  0: drone\n"
     )
 
-    # 5) per-regime val subsets. Emitted HERE, by the same run that decides the
-    #    split, so they can never drift out of sync with it -- a stale list
-    #    silently evaluates on training images and inflates the gate metric.
+    # 5) per-regime val subsets. Emitted here, by the same run that decides the split,
+    #    so they can never drift out of sync with it
     for stale in cfg_dir.glob("val_*.cache"):
         stale.unlink()                      # keyed to the old list; force a rescan
     for reg in REGIMES:
