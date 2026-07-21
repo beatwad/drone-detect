@@ -223,10 +223,14 @@ def main():
 
     # 4) copy files + manifest
     manifest = []
+    val_by_regime = defaultdict(list)  # regime -> copied val image paths
     for i, (new_stem, prefix, regime, img, lbl) in enumerate(records):
         split = assign[i]
-        shutil.copy2(img, out / split / "images" / f"{new_stem}{img.suffix.lower()}")
+        dst = out / split / "images" / f"{new_stem}{img.suffix.lower()}"
+        shutil.copy2(img, dst)
         shutil.copy2(lbl, out / split / "labels" / f"{new_stem}.txt")
+        if split == "val":
+            val_by_regime[regime].append(dst)
         manifest.append((new_stem, prefix, regime, split, uf.find(i), str(img)))
 
     with open(out / "manifest.csv", "w", newline="") as f:
@@ -234,10 +238,30 @@ def main():
         w.writerow(["stem", "source", "regime", "split", "cluster", "orig_image"])
         w.writerows(manifest)
 
-    (ROOT / "configs/drone.yaml").write_text(
+    cfg_dir = ROOT / "configs"
+    (cfg_dir / "drone.yaml").write_text(
         f"path: {out}\ntrain: {out / 'train/images'}\nval: {out / 'val/images'}\n"
         f"nc: 1\nnames:\n  0: drone\n"
     )
+
+    # 5) per-regime val subsets. Emitted HERE, by the same run that decides the
+    #    split, so they can never drift out of sync with it -- a stale list
+    #    silently evaluates on training images and inflates the gate metric.
+    for stale in cfg_dir.glob("val_*.cache"):
+        stale.unlink()                      # keyed to the old list; force a rescan
+    for reg in REGIMES:
+        lst = cfg_dir / f"val_{reg}.txt"
+        yml = cfg_dir / f"drone_val_{reg}.yaml"
+        paths = val_by_regime.get(reg, [])
+        if not paths:
+            lst.unlink(missing_ok=True)     # don't leave a stale list behind
+            yml.unlink(missing_ok=True)
+            continue
+        lst.write_text("".join(f"{p}\n" for p in sorted(paths)))
+        yml.write_text(
+            f"path: {out}\ntrain: {out / 'train/images'}\nval: {lst}\n"
+            f"nc: 1\nnames:\n  0: drone\n"
+        )
 
     tr = sum(1 for m in manifest if m[3] == "train")
     print(f"\nTOTAL kept={len(manifest)}  train={tr} val={len(manifest)-tr}")
@@ -246,6 +270,9 @@ def main():
         v = sum(1 for m in manifest if m[2] == reg and m[3] == "val")
         print(f"  regime {reg:5}: train={t} val={v}")
     print(f"wrote configs/drone.yaml and {out / 'manifest.csv'}")
+    print("wrote per-regime val subsets: " +
+          ", ".join(f"val_{r}.txt({len(val_by_regime[r])})"
+                    for r in REGIMES if val_by_regime.get(r)))
 
 
 if __name__ == "__main__":
