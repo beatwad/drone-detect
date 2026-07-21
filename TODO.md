@@ -1,5 +1,4 @@
-- add W&B monitoring
 - add more data from datasets in project_links.md
 - add more augmentations
-- the real task of the ML model is to find out if drone is strictlyin the middle of the screen and nothing else, so it needs to find only one object in the frame 
+- the real task of the ML model is to find out if drone is strictly in the middle of the screen and nothing else, so it needs to find only one object in the frame 
 - replace NMS with WBF

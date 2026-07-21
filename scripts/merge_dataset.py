@@ -1,20 +1,32 @@
 #!/usr/bin/env python3
-"""Merge the two Kaggle drone datasets into one clean single-class YOLO set.
+"""Merge the drone datasets into one clean single-class YOLO set.
 
-Sources (both single-class `0: drone`):
-  A = data/raw/drone_dataset   (muki2003, ~1359 imgs, CLOSE-range framing)
-  B = data/raw/Database1       (sshikamaru, ~4010 imgs, LONG-range, video frames)
+Sources (all single-class `0: drone`):
+  A = data/raw/drone_dataset            (muki2003, ~1359 imgs, CLOSE-range framing)
+  B = data/raw/Database1                (sshikamaru, ~4010 imgs, LONG-range, video frames)
+  C = data/Drone.v1i.yolov5pytorch      (Roboflow, ~17.7k imgs, mixed range)
+  D = data/UAVs.v2i.yolov5pytorch       (Roboflow, ~9.3k imgs, mixed range)
 
-Steps: pair image<->label by stem, drop unpaired, drop exact-hash duplicates,
-prefix filenames by source (avoids stem collisions), cluster NEAR-duplicates by
-perceptual hash (video frames differ slightly frame-to-frame), then a seeded
-80/20 split STRATIFIED by source where whole pHash-clusters go to one side only
-(prevents near-dup train/val leakage). Copy into
-data/drone/{train,val}/{images,labels}, write configs/drone.yaml + a manifest.
+Steps: pair image<->label by stem, drop unpaired, collapse Roboflow augmentation
+copies, drop exact-hash duplicates, prefix filenames by source (avoids stem
+collisions), cluster NEAR-duplicates by perceptual hash (video frames differ
+slightly frame-to-frame), then a seeded 80/20 split STRATIFIED by source where
+whole pHash-clusters go to one side only (prevents near-dup train/val leakage).
+Copy into data/drone/{train,val}/{images,labels}, write configs/drone.yaml + a
+manifest.
+
+The Roboflow exports ship pre-augmented: the same source image appears up to 6x
+as `<stem>_jpg.rf.<hash>.jpg`. Their flips/rotations move the pHash well past
+PHASH_HAMMING (measured: 99% of same-source pairs), so clustering would NOT group
+them and copies could land on both sides of the split. We therefore keep one copy
+per base stem -- augmentation belongs in the training loop, not the dataset.
+
+The Roboflow sources are also range-bimodal, so `regime` is derived per-image from
+the largest box rather than being a per-source constant.
 """
-import argparse, csv, hashlib, shutil, random
+import argparse, csv, hashlib, re, shutil, random
 from pathlib import Path
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 import imagehash
 from PIL import Image
@@ -24,11 +36,21 @@ ROOT = Path(__file__).resolve().parents[1]
 PHASH_HAMMING = 6          # <= this many differing bits => near-duplicate
 BIG_BUCKET = 200           # LSH bucket bigger than this => merge whole (safe over-merge)
 
-# source dir -> (prefix, regime tag)
+# Roboflow augmentation suffix: `0002_jpg.rf.<md5>` -> base stem `0002`
+RF_AUG = re.compile(r"_(?:jpe?g|png|bmp)\.rf\.[0-9a-f]+$", re.I)
+
+# regime thresholds on largest-box area as a fraction of frame
+CLOSE_AREA = 0.10          # >= 10% of frame => close range (our target regime)
+LONG_AREA = 0.01           # <  1% of frame  => long range
+
+# source dir -> (prefix, collapse Roboflow augmentation copies?)
 SOURCES = {
-    ROOT / "data/raw/drone_dataset": ("A", "close"),
-    ROOT / "data/raw/Database1": ("B", "long"),
+    ROOT / "data/raw/drone_dataset": ("A", False),
+    ROOT / "data/raw/Database1": ("B", False),
+    ROOT / "data/Drone.v1i.yolov5pytorch": ("C", True),
+    ROOT / "data/UAVs.v2i.yolov5pytorch": ("D", True),
 }
+REGIMES = ("close", "mid", "long", "empty")
 
 
 def md5(path: Path) -> str:
@@ -58,6 +80,20 @@ class UF:
     def union(self, a, b):
         ra, rb = self.find(a), self.find(b)
         if ra != rb: self.p[ra] = rb
+
+
+def regime_of(lbl_path: Path) -> str:
+    """close/mid/long from the largest box in a YOLO label file."""
+    best = 0.0
+    for row in lbl_path.read_text().split("\n"):
+        p = row.split()
+        if len(p) == 5:
+            best = max(best, float(p[3]) * float(p[4]))
+    if best == 0.0:
+        return "empty"          # no boxes: background negative
+    if best >= CLOSE_AREA:
+        return "close"
+    return "long" if best < LONG_AREA else "mid"
 
 
 def phash64(path: Path):
@@ -110,23 +146,34 @@ def main():
     out = Path(args.out)
     for split in ("train", "val"):
         for kind in ("images", "labels"):
+            # wipe first: a re-run reshuffles the split, and leftovers from a
+            # previous split would leave the same image in BOTH train and val
+            shutil.rmtree(out / split / kind, ignore_errors=True)
             (out / split / kind).mkdir(parents=True, exist_ok=True)
 
     # 1) collect + exact-dedup per source
     records = []  # (new_stem, prefix, regime, img_path, lbl_path)
-    for src_dir, (prefix, regime) in SOURCES.items():
+    for src_dir, (prefix, collapse) in SOURCES.items():
         paired, n_img, n_lbl = collect(src_dir)
+        stems = sorted(paired)
+        n_aug = 0
+        if collapse:
+            by_base = {}
+            for stem in stems:
+                by_base.setdefault(RF_AUG.sub("", stem), stem)  # first wins, deterministic
+            n_aug = len(stems) - len(by_base)
+            stems = sorted(by_base.values())
         seen = set(); kept = 0
-        for stem in sorted(paired):
+        for stem in stems:
             img, lbl = paired[stem]
             h = md5(img)
             if h in seen:
                 continue
             seen.add(h)
-            records.append((f"{prefix}_{stem}", prefix, regime, img, lbl))
+            records.append((f"{prefix}_{stem}", prefix, regime_of(lbl), img, lbl))
             kept += 1
         print(f"[{prefix}] imgs={n_img} lbls={n_lbl} paired={len(paired)} "
-              f"dropped_exactdup={len(paired)-kept} -> kept={kept}")
+              f"dropped_augcopy={n_aug} dropped_exactdup={len(stems)-kept} -> kept={kept}")
 
     # 2) perceptual-hash near-duplicate clustering (drop unreadable images)
     print(f"computing pHash for {len(records)} images ...")
@@ -149,24 +196,30 @@ def main():
     n_dup_frames = len(records) - n_clusters
     print(f"pHash clusters: {n_clusters} (grouped {n_dup_frames} near-dup frames)")
 
-    # 3) split by cluster, stratified by source (whole cluster -> one side)
-    src_clusters = defaultdict(list)  # prefix -> list of cluster (list of idx)
-    for members in groups.values():
-        prefix = records[members[0]][1]  # clusters are ~single-source
-        src_clusters[prefix].append(members)
+    # 3) split by cluster (whole cluster -> one side only, never split: this is
+    #    what prevents near-dup train/val leakage). Clusters routinely SPAN
+    #    sources, since the Roboflow sets re-publish images already in A/B, so we
+    #    take a cluster into val only while every source it touches is still under
+    #    its own val target. Largest clusters first, so one big video-frame
+    #    cluster can't overshoot the target the way first-fit did.
+    per_src_total = Counter(r[1] for r in records)
+    target_val = {s: round(n * args.val_frac) for s, n in per_src_total.items()}
+    n_val = Counter()
+
+    clusters = list(groups.values())
+    rng.shuffle(clusters)                      # tie-break randomly, then pack big-first
+    clusters.sort(key=len, reverse=True)
 
     assign = {}  # idx -> split
-    for prefix, clusters in src_clusters.items():
-        rng.shuffle(clusters)
-        n_total = sum(len(c) for c in clusters)
-        target_val = round(n_total * args.val_frac)
-        n_val = 0
-        for c in clusters:
-            split = "val" if n_val < target_val else "train"
-            if split == "val":
-                n_val += len(c)
-            for idx in c:
-                assign[idx] = split
+    for c in clusters:
+        comp = Counter(records[i][1] for i in c)
+        if all(n_val[s] + k <= target_val[s] for s, k in comp.items()):
+            split = "val"
+            n_val.update(comp)
+        else:
+            split = "train"
+        for idx in c:
+            assign[idx] = split
 
     # 4) copy files + manifest
     manifest = []
@@ -188,7 +241,7 @@ def main():
 
     tr = sum(1 for m in manifest if m[3] == "train")
     print(f"\nTOTAL kept={len(manifest)}  train={tr} val={len(manifest)-tr}")
-    for reg in ("close", "long"):
+    for reg in REGIMES:
         t = sum(1 for m in manifest if m[2] == reg and m[3] == "train")
         v = sum(1 for m in manifest if m[2] == reg and m[3] == "val")
         print(f"  regime {reg:5}: train={t} val={v}")

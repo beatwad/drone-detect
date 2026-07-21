@@ -40,8 +40,11 @@ until a devkit is chosen.
 ## Environment
 - **uv-managed** venv at `.venv/`, Python 3.11, locked in `uv.lock`. Run
   everything via `uv run ...`.
-- GPU: **GTX 1070, 8 GB** (Pascal, capability 6.1). torch **2.4.1+cu121**,
-  CUDA available and verified.
+- GPU: **RTX 4090, 24 GB** (Ada, capability 8.9), 12 CPU cores. torch
+  **2.4.1+cu121**, CUDA available and verified. Note the torch build has no
+  `sm_89` cubin (arch list stops at `sm_86`, plus `sm_90`); `sm_86` is
+  binary-compatible with Ada, so this is harmless — don't "fix" it.
+  (Earlier work was done on a GTX 1070, 8 GB — old batch sizes reflect that.)
 - Key libs: brevitas 0.13.0, qonnx 1.0.0, onnx 1.22, onnxruntime 1.27,
   opencv 4.11, albumentations 2.0.8, kaggle 2.2.3, numpy 1.26 (pinned <2).
 - Repo layout: `scripts/ configs/ training/ qat/ export/` (skeleton),
