@@ -1,0 +1,6 @@
+path: /home/alex/Repos/drone-detect/data/drone
+train: /home/alex/Repos/drone-detect/data/drone/train/images
+val: /home/alex/Repos/drone-detect/configs/val_mid.txt
+nc: 1
+names:
+  0: drone
