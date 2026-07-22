@@ -1,5 +1,3 @@
-- the real task of the ML model is to find out if drone is strictly in the middle of the screen and nothing else, so it needs to find only one object in the frame + it cares only about aligning of center of the drone and center of the screen - so the idea is to change loss function by adding more weight to coordinate precision and less weight to bounding boxes
-
 Postprocessing flow:
 1. Select seed box. From the pre-NMS boxes, keep those with conf > thresh_conf; pick the one closest to screen center. (If None → close_enough = False, exit.)
 2. Gather cluster. Collect all boxes with IOU > thresh_iou against the seed box.
