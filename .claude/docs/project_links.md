@@ -10,11 +10,16 @@ Pull with: `uv run kaggle datasets download -d <slug> -p data/raw --unzip`
 (needs `~/.kaggle/kaggle.json`, `chmod 600`).
 
 ### Candidates (Roboflow Universe)
-Both are several-thousand-image single-class drone sets, export as YOLOv5
-PyTorch TXT (drop straight into pipeline). TODO before merging: check license,
-measure bbox-size (close vs long regime), pHash-dedup against existing data.
-- `project-986i8/drone-uskpc` — https://universe.roboflow.com/project-986i8/drone-uskpc/dataset/1
-- `pauls-workspace-bpzqa/universal-drone-tracker` — https://universe.roboflow.com/pauls-workspace-bpzqa/universal-drone-tracker/dataset/2
+These three show good model performance
+https://universe.roboflow.com/computer-vision-yxj4a/drone-detection-oqauc
+https://universe.roboflow.com/ai-bmkoo/drone-detection-inlmy
+https://universe.roboflow.com/itzak/drone-detection-6f8tk
+Don't know model performance for this but have a lot of stars
+https://universe.roboflow.com/drone-detection-g4d3g/drone-detection-a1tsf
+Relatively high performance, but
+
+Previous:
+https://universe.roboflow.com/project-986i8/drone-uskpc
 
 ## Toolchain
 - FINN (AMD/Xilinx) — https://github.com/Xilinx/finn

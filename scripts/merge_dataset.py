@@ -4,8 +4,8 @@
 Sources (all single-class `0: drone`):
   A = data/raw/drone_dataset            (muki2003, ~1359 imgs, CLOSE-range framing)
   B = data/raw/Database1                (sshikamaru, ~4010 imgs, LONG-range, video frames)
-  C = data/Drone.v1i.yolov5pytorch      (Roboflow, ~17.7k imgs, mixed range)
-  D = data/UAVs.v2i.yolov5pytorch       (Roboflow, ~9.3k imgs, mixed range)
+  C = data/raw/Drone.v1i.yolov5pytorch  (Roboflow, ~17.7k imgs, mixed range)
+  D = data/raw/UAVs.v2i.yolov5pytorch   (Roboflow, ~9.3k imgs, mixed range)
 
 Steps: pair image<->label by stem, drop unpaired, collapse Roboflow augmentation
 copies, drop exact-hash duplicates, prefix filenames by source (avoids stem
@@ -48,8 +48,8 @@ LONG_AREA = 0.01           # <  1% of frame  => long range
 SOURCES = {
     ROOT / "data/raw/drone_dataset": ("A", False),
     ROOT / "data/raw/Database1": ("B", False),
-    ROOT / "data/Drone.v1i.yolov5pytorch": ("C", True),
-    ROOT / "data/UAVs.v2i.yolov5pytorch": ("D", True),
+    ROOT / "data/raw/Drone.v1i.yolov5pytorch": ("C", True),
+    ROOT / "data/raw/UAVs.v2i.yolov5pytorch": ("D", True),
 }
 REGIMES = ("close", "mid", "long", "empty")
 
