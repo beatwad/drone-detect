@@ -1,3 +1,4 @@
+
 Postprocessing flow:
 1. Select seed box. From the pre-NMS boxes, keep those with conf > thresh_conf; pick the one closest to screen center. (If None → close_enough = False, exit.)
 2. Gather cluster. Collect all boxes with IOU > thresh_iou against the seed box.

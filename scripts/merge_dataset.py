@@ -6,6 +6,8 @@ Sources (all single-class `0: drone`):
   B = data/raw/Database1                (sshikamaru, ~4010 imgs, LONG-range, video frames)
   C = data/raw/Drone.v1i.yolov5pytorch  (Roboflow, ~17.7k imgs, mixed range)
   D = data/raw/UAVs.v2i.yolov5pytorch   (Roboflow, ~9.3k imgs, mixed range)
+  E = data/raw/Drone detection.v8i.yolov5pytorch (Roboflow, mixed range +
+      bird/plane/sky hard-negative empties, incl. military Shahed-136 drones)
 
 Steps: pair image<->label by stem, drop unpaired, collapse Roboflow augmentation
 copies, drop exact-hash duplicates, prefix filenames by source (avoids stem
@@ -50,6 +52,7 @@ SOURCES = {
     ROOT / "data/raw/Database1": ("B", False),
     ROOT / "data/raw/Drone.v1i.yolov5pytorch": ("C", True),
     ROOT / "data/raw/UAVs.v2i.yolov5pytorch": ("D", True),
+    ROOT / "data/raw/Drone detection.v8i.yolov5pytorch": ("E", True),
 }
 REGIMES = ("close", "mid", "long", "empty")
 

@@ -10,16 +10,19 @@ Pull with: `uv run kaggle datasets download -d <slug> -p data/raw --unzip`
 (needs `~/.kaggle/kaggle.json`, `chmod 600`).
 
 ### Candidates (Roboflow Universe)
-These three show good model performance
-https://universe.roboflow.com/computer-vision-yxj4a/drone-detection-oqauc
-https://universe.roboflow.com/ai-bmkoo/drone-detection-inlmy
-https://universe.roboflow.com/itzak/drone-detection-6f8tk
+These show good model performance
+https://universe.roboflow.com/tracker-qjlj1/drones_new
 Don't know model performance for this but have a lot of stars
 https://universe.roboflow.com/drone-detection-g4d3g/drone-detection-a1tsf
-Relatively high performance, but
+Relatively high performance, but a lot of garbage images
+https://universe.roboflow.com/aatish-kumar-sahu-57emd
 
-Previous:
+Used:
+https://universe.roboflow.com/pauls-workspace-bpzqa/universal-drone-tracker
 https://universe.roboflow.com/project-986i8/drone-uskpc
+https://universe.roboflow.com/itzak/drone-detection-6f8tk
+https://universe.roboflow.com/computer-vision-yxj4a/drone-detection-oqauc
+https://universe.roboflow.com/ai-bmkoo/drone-detection-inlmy
 
 ## Toolchain
 - FINN (AMD/Xilinx) — https://github.com/Xilinx/finn
