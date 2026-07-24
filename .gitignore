@@ -23,3 +23,4 @@ kaggle.json
 # --- misc ---
 .DS_Store
 *.log
+*.cache

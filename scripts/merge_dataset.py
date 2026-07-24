@@ -8,6 +8,15 @@ Sources (all single-class `0: drone`):
   D = data/raw/UAVs.v2i.yolov5pytorch   (Roboflow, ~9.3k imgs, mixed range)
   E = data/raw/Drone detection.v8i.yolov5pytorch (Roboflow, mixed range +
       bird/plane/sky hard-negative empties, incl. military Shahed-136 drones)
+  F = data/raw/Drone detection.v3i.yolov5pytorch (Roboflow, MULTI-class:
+      aircraft/bird/drone/helicopter. Class-mapped to single-class: drone->0
+      is kept; aircraft/bird/helicopter boxes are dropped, leaving empty
+      labels -> long-distance hard-negative empties, like E.)
+  G = data/raw/Drone Detection.v1i.yolov5pytorch (Roboflow, single-class drone;
+      train sequentially pHash-deduped of near-dup frames before merging.)
+  H = data/raw/Drone Detection.v6i.yolov5pytorch (Roboflow, single-class drone;
+      pre-cleaned: pHash-exact dups of the merged set removed, then internally
+      clustered to one image per near-dup group.)
 
 Steps: pair image<->label by stem, drop unpaired, collapse Roboflow augmentation
 copies, drop exact-hash duplicates, prefix filenames by source (avoids stem
@@ -46,13 +55,21 @@ RF_AUG = re.compile(r"_(?:jpe?g|png|bmp)\.rf\.[0-9a-f]+$", re.I)
 CLOSE_AREA = 0.10          # >= 10% of frame => close range (our target regime)
 LONG_AREA = 0.01           # <  1% of frame  => long range
 
-# source dir -> (prefix, collapse Roboflow augmentation copies?)
+# source dir -> (prefix, collapse Roboflow augmentation copies?, class_map)
+# class_map: None => labels are already single-class (0: drone), copied verbatim.
+#            dict => keep only these source class ids, remapped to the new id;
+#                    every other box is dropped (may yield an empty label).
 SOURCES = {
-    ROOT / "data/raw/drone_dataset": ("A", False),
-    ROOT / "data/raw/Database1": ("B", False),
-    ROOT / "data/raw/Drone.v1i.yolov5pytorch": ("C", True),
-    ROOT / "data/raw/UAVs.v2i.yolov5pytorch": ("D", True),
-    ROOT / "data/raw/Drone detection.v8i.yolov5pytorch": ("E", True),
+    ROOT / "data/raw/drone_dataset": ("A", False, None),
+    ROOT / "data/raw/Database1": ("B", False, None),
+    ROOT / "data/raw/Drone.v1i.yolov5pytorch": ("C", True, None),
+    ROOT / "data/raw/UAVs.v2i.yolov5pytorch": ("D", True, None),
+    ROOT / "data/raw/Drone detection.v8i.yolov5pytorch": ("E", True, None),
+    # v3i is multi-class (0=aircraft,1=bird,2=drone,3=helicopter): keep drone
+    # as class 0, drop the rest -> distant non-drone imgs become empty negatives.
+    ROOT / "data/raw/Drone detection.v3i.yolov5pytorch": ("F", True, {2: 0}),
+    ROOT / "data/raw/Drone Detection.v1i.yolov5pytorch": ("G", True, None),
+    ROOT / "data/raw/Drone Detection.v6i.yolov5pytorch": ("H", True, None),
 }
 REGIMES = ("close", "mid", "long", "empty")
 
@@ -86,10 +103,28 @@ class UF:
         if ra != rb: self.p[ra] = rb
 
 
-def regime_of(lbl_path: Path) -> str:
-    """close/mid/long from the largest box in a YOLO label file."""
+def load_label(lbl_path: Path, class_map) -> str:
+    """YOLO label text, optionally class-remapped.
+
+    class_map=None copies the file verbatim. Otherwise keep only rows whose
+    class id is a key in class_map, rewriting it to class_map[id]; all other
+    rows are dropped (an image with no surviving box yields an empty label).
+    """
+    text = lbl_path.read_text()
+    if class_map is None:
+        return text
+    out = []
+    for row in text.split("\n"):
+        p = row.split()
+        if len(p) == 5 and int(p[0]) in class_map:
+            out.append(" ".join([str(class_map[int(p[0])]), *p[1:]]))
+    return "".join(f"{r}\n" for r in out)
+
+
+def regime_of(text: str) -> str:
+    """close/mid/long from the largest box in YOLO label text."""
     best = 0.0
-    for row in lbl_path.read_text().split("\n"):
+    for row in text.split("\n"):
         p = row.split()
         if len(p) == 5:
             best = max(best, float(p[3]) * float(p[4]))
@@ -156,8 +191,8 @@ def main():
             (out / split / kind).mkdir(parents=True, exist_ok=True)
 
     # 1) collect + exact-dedup per source
-    records = []  # (new_stem, prefix, regime, img_path, lbl_path)
-    for src_dir, (prefix, collapse) in SOURCES.items():
+    records = []  # (new_stem, prefix, regime, img_path, lbl_text)
+    for src_dir, (prefix, collapse, class_map) in SOURCES.items():
         paired, n_img, n_lbl = collect(src_dir)
         stems = sorted(paired)
         n_aug = 0
@@ -174,7 +209,8 @@ def main():
             if h in seen:
                 continue
             seen.add(h)
-            records.append((f"{prefix}_{stem}", prefix, regime_of(lbl), img, lbl))
+            lbl_text = load_label(lbl, class_map)
+            records.append((f"{prefix}_{stem}", prefix, regime_of(lbl_text), img, lbl_text))
             kept += 1
         print(f"[{prefix}] imgs={n_img} lbls={n_lbl} paired={len(paired)} "
               f"dropped_augcopy={n_aug} dropped_exactdup={len(stems)-kept} -> kept={kept}")
@@ -237,11 +273,11 @@ def main():
     # 4) copy files + manifest
     manifest = []
     val_by_regime = defaultdict(list)  # regime -> copied val image paths
-    for i, (new_stem, prefix, regime, img, lbl) in enumerate(records):
+    for i, (new_stem, prefix, regime, img, lbl_text) in enumerate(records):
         split = assign[i]
         dst = out / split / "images" / f"{new_stem}{img.suffix.lower()}"
         shutil.copy2(img, dst)
-        shutil.copy2(lbl, out / split / "labels" / f"{new_stem}.txt")
+        (out / split / "labels" / f"{new_stem}.txt").write_text(lbl_text)
         if split == "val":
             val_by_regime[regime].append(dst)
         manifest.append((new_stem, prefix, regime, split, uf.find(i), str(img)))
