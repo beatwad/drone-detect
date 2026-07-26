@@ -17,6 +17,14 @@ Sources (all single-class `0: drone`):
   H = data/raw/Drone Detection.v6i.yolov5pytorch (Roboflow, single-class drone;
       pre-cleaned: pHash-exact dups of the merged set removed, then internally
       clustered to one image per near-dup group.)
+  I = data/raw/Drone Detection.v5i.yolov5pytorch (Roboflow, MULTI-class:
+      UAV/drone -- both are drones here, so both map to 0. Ships NO augmentation
+      copies, so it is NOT collapsed by base stem (see below). ~33% empty labels
+      = negatives, though easy ones (4% false-alarm rate vs 33-38% for E/F).
+      Pre-cleaned in two passes: scripts/dedup_vs_merged.py dropped 700 images
+      duplicating the merged set, then scripts/drop_tiny_boxes.py dropped 3901
+      frames whose every box was under 12px at the 640 input -- below YOLOv5's
+      P3/stride-8 floor, so unreachable. 16697 -> 12096.)
 
 Steps: pair image<->label by stem, drop unpaired, collapse Roboflow augmentation
 copies, drop exact-hash duplicates, prefix filenames by source (avoids stem
@@ -27,11 +35,18 @@ train/val leakage).
 Copy into data/drone/{train,val}/{images,labels}, write configs/drone.yaml + a
 manifest.
 
-The Roboflow exports ship pre-augmented: the same source image appears up to 6x
+MOST Roboflow exports ship pre-augmented: the same source image appears up to 6x
 as `<stem>_jpg.rf.<hash>.jpg`. Their flips/rotations move the pHash well past
 PHASH_HAMMING (measured: 99% of same-source pairs), so clustering would NOT group
 them and copies could land on both sides of the split. We therefore keep one copy
 per base stem -- augmentation belongs in the training loop, not the dataset.
+
+That collapse is per-source (the `collapse` flag) and must be OFF for a source that
+ships no augmentation, because the base stem is upstream-provided and not unique: a
+project assembled from several sub-datasets can have `00004_jpg.rf.*` in train,
+valid and test as three UNRELATED images. Collapsing those discards real data (for
+I: 4295 of 15997 images). Check the source's README.roboflow.txt for "No image
+augmentation techniques were applied" before adding it.
 
 The Roboflow sources are also range-bimodal, so `regime` is derived per-image from
 the largest box rather than being a per-source constant.
@@ -70,6 +85,9 @@ SOURCES = {
     ROOT / "data/raw/Drone detection.v3i.yolov5pytorch": ("F", True, {2: 0}),
     ROOT / "data/raw/Drone Detection.v1i.yolov5pytorch": ("G", True, None),
     ROOT / "data/raw/Drone Detection.v6i.yolov5pytorch": ("H", True, None),
+    # v5i is multi-class (0=UAV, 1=drone): both are drones for us -> both to 0.
+    # collapse=False: this export has no augmentation copies, only colliding stems.
+    ROOT / "data/raw/Drone Detection.v5i.yolov5pytorch": ("I", False, {0: 0, 1: 0}),
 }
 REGIMES = ("close", "mid", "long", "empty")
 
