@@ -1,9 +1,8 @@
 # drone-detect
 
-Close-range (≤10 m) drone detection for precision aiming, targeting an
-**FPGA-accelerated** deployment. A vision system detects a large-in-frame drone
-and outputs angular/positional data to a downstream kinetic aiming subsystem.
-Latency budget end-to-end ~50–100 ms.
+Ultra-fast drone detection system targeting a **FPGA-accelerated** deployment. 
+A vision system detects a drone and outputs angular/positional data to a downstream subsystem.
+Latency budget end-to-end ~10-20 ms.
 
 **Status: Proof of Concept.** The host-side float model is trained and passes its
 gate; quantization and FPGA synthesis are not started.
@@ -149,12 +148,7 @@ Current build: **36,903 images**, 29,609 train / 7,294 val.
 | images | 8,878 | 9,831 | 13,059 | 5,135 |
 
 **Regime** is derived per image from the largest ground-truth box: `close` ≥10% of
-frame area, `long` <1%, `mid` between, `empty` no box. Close-range is the target
-regime — track it separately, aggregate mAP mixes wildly different difficulties.
-
-> The project brief's §5 claim that both Kaggle sets are long-range is **wrong**.
-> Measured box areas show source A is already close-range (median box 33% of frame);
-> source B is the long-range one (median 0.55%).
+frame area, `long` <1%, `mid` between, `empty` no box.
 
 **Roboflow augmentation collapse** is per-source (the `collapse` flag). Most Roboflow
 exports ship each source image up to 6× as `<stem>_jpg.rf.<hash>.jpg`; their
@@ -218,10 +212,10 @@ so `model.modules()` reports a single SiLU — the swap is done by rebinding
 
 ### Evaluation
 
-Notebook cells 6–6c cover what actually matters for aiming, beyond aggregate mAP:
+Notebook cells 6–6c cover what actually matters, beyond aggregate mAP:
 per-regime mAP, mean IoU of matched true positives, **mean center error** in pixels
-and as a fraction of image diagonal (this is the aim-precision metric), and false
-positives per regime. `empty` has no ground truth, so it is scored as a background
+and as a fraction of image diagonal, and false positives per regime. 
+`empty` has no ground truth, so it is scored as a background
 false-alarm rate instead of mAP.
 
 Per-regime val from the CLI:
@@ -292,12 +286,12 @@ uv run python yolov5/detect.py \
 Other sources work through the same flag: a file path, a directory, a glob, an RTSP
 or HTTP URL, or `screen` for a screen grab.
 
-### Caveat: this is a demo harness, not the aiming pipeline
+### Caveat: this is a demo harness
 
 `detect.py` is per-frame and stateless — NMS, annotate, display. It answers *"does
-the model see the drone through my camera"*, and nothing more. The tracking and
-aiming logic sketched in [TODO.md](TODO.md) — seed-box selection nearest screen
-center, IoU cluster gathering, weighted box fusion, Kalman predict/update with a miss
+the model see the drone through my camera"*, and nothing more. The tracking logic 
+sketched in [TODO.md](TODO.md) — seed-box selection nearest screen center, 
+IoU cluster gathering, weighted box fusion, Kalman predict/update with a miss
 counter and re-seeding, then a hysteresis + debounce gate producing the center offset
 and a `close_enough` flag — **is not implemented anywhere yet.** It needs a separate
 script working off the pre-NMS boxes.
