@@ -12,18 +12,57 @@ Full source docs live in [.claude/docs/](.claude/docs/):
 ## Pipeline (target)
 `YOLOv5n (float)` → `Brevitas QAT (INT8, SiLU→ReLU)` → `QONNX export` →
 `FINN → bitstream` → `PYNQ deployment`. Everything up to and including QONNX
-export is **board-agnostic** and done on the host GPU; FINN synthesis and
-everything downstream (camera/UVC, on-ARM NMS, latency validation) is deferred
-until a devkit is chosen.
+export is **board-agnostic** and done on the host GPU. Downstream work is
+unblocked now that the devkit is chosen (see Locked decisions).
+
+> **Open blocker — FINN and branched topologies.** FINN 0.10 reportedly cannot
+> compile branched graphs (concat / residual rejoin); both published Z7020 YOLO
+> implementations deleted the FPN and upsample+concat for exactly this reason.
+> yolov5n has 4 concats and 11 C3 residual adds, so this blocks it on **any**
+> board — it is a toolchain limit, not a resource limit. Untested on our FINN
+> version; the QONNX-export + FINN-frontend check is the decisive next step.
+> Fallbacks if it holds: a branch-free net (`configs/yolov5_pico.yaml`), or
+> **Vitis AI DPU** (DPUCZDX8G officially supports ZCU102, runs branched yolov5n
+> natively — unavailable on Zynq-7000).
+
+> **"Close range" is a lens question, not just a distance.** A 30 cm drone at
+> 10 m subtends 1.72° — at 60° FOV / 640 px that is **18 px**, i.e. our *long*
+> regime, not the close one. Getting a genuinely large-in-frame target at 10 m
+> needs a ~5° FOV (telephoto). Unresolved, and it decides which per-regime
+> number we actually have to hit.
 
 ### Host-side phases (what we're building)
 0. Scaffolding — **DONE**
 1. Dataset acquisition + merge — **DONE** (see `scripts/merge_dataset.py`,
    `configs/drone.yaml`, `data/drone/` + `manifest.csv`)
-2. Augmentation (close-range framing from long-range data)
-3. Float training YOLOv5n — gate: **mAP50 > 0.85** on val
-4. Brevitas QAT (INT8, SiLU→ReLU) — gate: quant mAP within budget of float
-5. QONNX export (board-agnostic handoff to FINN)
+2. Augmentation (close-range framing) — **DONE** (in-loop via hyp; `mosaic: 0.5`)
+3. Float training YOLOv5n — gate mAP50 > 0.85 — **DONE**, mAP50 **0.963**
+   (`runs/train/more_data_5`, SiLU) and **0.963** (`relu_more_data_5`, ReLU)
+4. Brevitas QAT — **DONE** (`qat/`): **INT8 needs no fine-tuning at all**
+   (W8A8 PTQ mAP50 0.9628 vs float 0.9629). 4-bit weights collapse under PTQ
+   (0.197) but QAT recovers close range to 0.9856. Gate met.
+5. QONNX export (handoff to FINN) — **NOT STARTED**, and now the critical path:
+   it decides FINN-vs-DPU (see the branch blocker above).
+6. `configs/yolov5_pico.yaml` — branch-free, single-scale, 357k-param fallback
+   for FINN. Float close mAP50 **0.975** vs yolov5n's 0.989; long range 0.778 vs
+   0.904. Not yet quantized. Sized for a Z7020 budget, so ~10% of a ZCU102.
+
+### Open questions (settle these before more model work)
+1. **Deployment FOV / lens — highest leverage, and now urgent.** Which
+   per-regime number we actually have to hit depends entirely on the optics (see
+   the lens callout above). It is urgent because it also picks the C-mount lens
+   bought alongside the camera.
+   - To resolve: fix the engagement envelope (target size, min/max range), then
+     `FOV = 2·atan(target_size / (2·range·desired_frame_fraction))`.
+   - Lands **wide (≥40°)** → we operate in the **long** regime, where pico
+     scores 0.778 vs yolov5n's 0.904 and the branch-free compromise stops being
+     cheap. Lands **narrow (≤20°)** → close/mid, and pico is fine.
+   - Second-order: a narrow FOV makes *acquisition* hard (small search cone),
+     which may imply a two-stage wide-acquire → narrow-track arrangement.
+2. **What does pico cost once quantized?** Float close mAP50 is 0.975; W4A4 and
+   W4A8 are unmeasured. ~1 h — the existing `qat/` pipeline runs on pico
+   unchanged. Closes the last accuracy unknown on the FINN path. Expect
+   ~0.96–0.97 by analogy with yolov5n (INT8 free; W4A8 cost close range 0.5 pt).
 
 ## Locked decisions
 - **YOLOv5 source:** classic `ultralytics/yolov5` **v7.0**, vendored at
@@ -31,11 +70,60 @@ until a devkit is chosen.
   NOT master (which pulls in the `ultralytics` pkg + anchor-free code) and NOT
   the pip package. Rationale: matches the brief's anchor-based/C3 assumptions,
   keeps QAT graph surgery tractable, has known Brevitas/FINN precedent.
-- **SiLU→ReLU swap timing:** at the **QAT stage**, not before float training.
-  Float model trains with stock SiLU for the strongest baseline; ReLU
-  substitution + fine-tune happens during Brevitas QAT.
-- **Devkit:** undecided. Do NOT do devkit-specific work (PYNQ image, FINN
-  part-targeting, camera, actuator) until the board is chosen.
+- **SiLU→ReLU swap timing: REVISED — train float in ReLU from the start.**
+  (Was: "swap at the QAT stage, not before float training." Measurement
+  contradicted it.) A retrained ReLU model costs 2.1 pt mAP50-95 and **zero**
+  mAP50 / centre error vs SiLU. But *pasting* ReLU into SiLU-trained weights
+  destroys the model — mAP50 0.963 → **0.078**, close range → 0.0007 — because
+  ~49% of pre-activations are negative and ReLU zeroes them across 57 layers.
+  So QAT must start from `runs/train/relu_more_data_5/weights/best.pt`, never
+  from the SiLU model. Use `configs/yolov5n_relu.yaml` (`activation: nn.ReLU()`).
+- **Devkit (DEVELOPMENT ONLY):** **ZCU102** (XCZU9EG-2FFVB1156), chosen
+  2026-08-03. 274,080 LUT / 32.1 Mbit BRAM (912×36Kb, **no URAM**) / 2,520
+  DSP48E2; PS = 4× Cortex-A53 @1.2 GHz + 2× Cortex-R5F @500 MHz; 2× FMC HPC and
+  **no native MIPI** (MIPI would need a camera FMC module — but see the camera
+  decision below). Devkit-specific work (FINN part-targeting, PYNQ image,
+  camera, actuator) is now unblocked. This board is deliberately oversized —
+  experiment freely, but do NOT let its headroom drive architecture decisions.
+  *PS = Processing System (hard ARM cores + hard peripherals: DDR, USB, GEM,
+  I2C…). PL = Programmable Logic (the fabric). They talk over AXI: HP ports for
+  bandwidth, GP ports for control.*
+- **Camera: USB 3.0 global-shutter machine-vision camera** (development choice).
+  USB is a **PS** peripheral, so frames land in PS DDR and are then DMA'd to PL.
+  The "sensor streams into PL, preprocessing fused with acquisition" path is
+  therefore **NOT available** — that needs MIPI/parallel pixels on PL pins.
+  Accepted: est. ~10–25 ms end-to-end on ZCU102 with C preprocessing, well
+  inside the 50–100 ms budget.
+  - **Hardware trigger is a REQUIREMENT, not a nice-to-have.** Drive the camera
+    trigger from PL and you get an exact exposure timestamp t₀; the Kalman then
+    predicts forward from t₀, so variable USB/Linux delay becomes a *measured*
+    quantity instead of an error source. Without it every ms of jitter lands
+    directly in aim error.
+  - Also require: **ROI windowing** (sensor readout is the dominant latency
+    term), **C/CS-mount** (FOV unresolved — see the lens callout), modest
+    resolution (we feed 416 px; a 4K sensor just costs transfer time to discard
+    pixels), maintained ARM64 SDK or plain UVC.
+  - **Tension with the power target:** USB 3.0 keeps PS + Linux + DDR awake,
+    which fights the ~2–5 W deployment goal (Z7020 reference: 1.9 W of 2.55 W
+    was PS+DDR idle). Deployment may need MIPI-into-PL instead — so keep
+    preprocessing behind an interface and do NOT let software assume a
+    USB-shaped frame source.
+- **Deployment target (undecided, but it constrains design):** a smaller,
+  cheaper, **~2–5 W** UltraScale+ part — bigger than a Z7020, far smaller than a
+  ZU9EG. Candidates: ZU3EG (Ultra96-V2, 7.6 Mbit BRAM, ~$250), ZU5EV / Kria K26
+  (~23 Mbit incl. URAM), Kria K24. Portability rule of thumb, using
+  **theoretical on-chip footprint × 2** for FINN's real BRAM allocation
+  (multiplier measured from Electronics 2025 14:3993):
+  - **< ~7 Mbit** → ports to anything in the class (pico W4A8 = 3.5 Mbit)
+  - **7–23 Mbit** → needs a K26-class part (yolov5n@416 W4A8 = 21 Mbit)
+  - **> 23 Mbit** → ZU7EV/ZU9EG only, i.e. it does not ship
+  Record the footprint of anything we train so we know what ports.
+- **Power shape:** on the measured Z7020 reference, **1.9 W of 2.55 W total was
+  PS + DDR idle**; the fabric drew only 0.22–0.65 W. PS involvement, not fabric
+  size, dominates the power budget. So the full-fabric architecture that
+  minimises latency and jitter (preprocessing, decode, NMS, tracker in PL; A53s
+  parked; control on R5F) is *also* the low-power one. These goals converge —
+  don't trade one against the other.
 
 ## Environment
 - **uv-managed** venv at `.venv/`, Python 3.11, locked in `uv.lock`. Run
@@ -47,8 +135,10 @@ until a devkit is chosen.
   (Earlier work was done on a GTX 1070, 8 GB — old batch sizes reflect that.)
 - Key libs: brevitas 0.13.0, qonnx 1.0.0, onnx 1.22, onnxruntime 1.27,
   opencv 4.11, albumentations 2.0.8, kaggle 2.2.3, numpy 1.26 (pinned <2).
-- Repo layout: `scripts/ configs/ training/ qat/ export/` (skeleton),
-  `yolov5/` (vendored), `data/` + `runs/` are gitignored.
+- Repo layout: `scripts/` (merge + cleaning + `center_error.py`), `configs/`,
+  `training/`, `qat/` (`quantize.py` `ptq_baseline.py` `train_qat.py`
+  `evaluate.py`), `export/` (still empty), `yolov5/` (vendored).
+  `data/` + `runs/` are gitignored.
 
 ## Gotchas / notes
 - **Shared SiLU instance:** YOLOv5 uses one class-level `Conv.default_act =

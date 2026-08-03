@@ -2,22 +2,22 @@
 """Merge the drone datasets into one clean single-class YOLO set.
 
 Sources (all single-class `0: drone`):
-  A = data/raw/drone_dataset            (muki2003, ~1359 imgs, CLOSE-range framing)
-  B = data/raw/Database1                (sshikamaru, ~4010 imgs, LONG-range, video frames)
-  C = data/raw/Drone.v1i.yolov5pytorch  (Roboflow, ~17.7k imgs, mixed range)
-  D = data/raw/UAVs.v2i.yolov5pytorch   (Roboflow, ~9.3k imgs, mixed range)
-  E = data/raw/Drone detection.v8i.yolov5pytorch (Roboflow, mixed range +
+  A = data/raw/drone_dataset            (Kaggle, muki2003/yolo-drone-detection-dataset, ~1359 imgs, CLOSE-range framing)
+  B = data/raw/Database1                (Kaggle, sshikamaru/drone-yolo-detection, ~4010 imgs, LONG-range, video frames)
+  C = data/raw/Drone.v1i.yolov5pytorch  (Roboflow, project-986i8/drone-uskpc, ~17.7k imgs, mixed range)
+  D = data/raw/UAVs.v2i.yolov5pytorch   (Roboflow, uavs-7l7kv/uavs-vqpqt, ~9.3k imgs, mixed range)
+  E = data/raw/Drone detection.v8i.yolov5pytorch (Roboflow, itzak/drone-detection-6f8tk, mixed range +
       bird/plane/sky hard-negative empties, incl. military Shahed-136 drones)
-  F = data/raw/Drone detection.v3i.yolov5pytorch (Roboflow, MULTI-class:
+  F = data/raw/Drone detection.v3i.yolov5pytorch (Roboflow, computer-vision-yxj4a/drone-detection-oqauc, MULTI-class:
       aircraft/bird/drone/helicopter. Class-mapped to single-class: drone->0
       is kept; aircraft/bird/helicopter boxes are dropped, leaving empty
       labels -> long-distance hard-negative empties, like E.)
-  G = data/raw/Drone Detection.v1i.yolov5pytorch (Roboflow, single-class drone;
+  G = data/raw/Drone Detection.v1i.yolov5pytorch (Roboflow, ai-bmkoo/drone-detection-inlmy, single-class drone;
       train sequentially pHash-deduped of near-dup frames before merging.)
-  H = data/raw/Drone Detection.v6i.yolov5pytorch (Roboflow, single-class drone;
+  H = data/raw/Drone Detection.v6i.yolov5pytorch (Roboflow, drone-detection-g4d3g/drone-detection-a1tsf, single-class drone;
       pre-cleaned: pHash-exact dups of the merged set removed, then internally
       clustered to one image per near-dup group.)
-  I = data/raw/Drone Detection.v5i.yolov5pytorch (Roboflow, MULTI-class:
+  I = data/raw/Drone Detection.v5i.yolov5pytorch (Roboflow, aatish-kumar-sahu-57emd/drone-detection-1ghph, MULTI-class:
       UAV/drone -- both are drones here, so both map to 0. Ships NO augmentation
       copies, so it is NOT collapsed by base stem (see below). ~33% empty labels
       = negatives, though easy ones (4% false-alarm rate vs 33-38% for E/F).

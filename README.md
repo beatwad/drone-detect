@@ -77,15 +77,15 @@ must land in `data/raw/<exact dir name>`:
 
 | Src | `data/raw/` directory | Origin | Notes |
 |---|---|---|---|
-| A | `drone_dataset` | Kaggle `muki2003/yolo-drone-detection-dataset` | close-range, single-class |
-| B | `Database1` | Kaggle `sshikamaru/drone-yolo-detection` | long-range video frames |
-| C | `Drone.v1i.yolov5pytorch` | Roboflow Universe | mixed range |
-| D | `UAVs.v2i.yolov5pytorch` | Roboflow Universe | mixed range |
-| E | `Drone detection.v8i.yolov5pytorch` | Roboflow Universe | + bird/plane/sky hard negatives |
-| F | `Drone detection.v3i.yolov5pytorch` | Roboflow Universe | multi-class; only `drone` kept |
-| G | `Drone Detection.v1i.yolov5pytorch` | Roboflow Universe | single-class |
-| H | `Drone Detection.v6i.yolov5pytorch` | Roboflow Universe | single-class |
-| I | `Drone Detection.v5i.yolov5pytorch` | Roboflow Universe | multi-class UAV+drone → both to 0 |
+| A | `drone_dataset` | Kaggle — [muki2003/yolo-drone-detection-dataset](https://www.kaggle.com/datasets/muki2003/yolo-drone-detection-dataset) | close-range, single-class |
+| B | `Database1` | Kaggle — [sshikamaru/drone-yolo-detection](https://www.kaggle.com/datasets/sshikamaru/drone-yolo-detection) | long-range video frames |
+| C | `Drone.v1i.yolov5pytorch` | Roboflow — [project-986i8/drone-uskpc](https://universe.roboflow.com/project-986i8/drone-uskpc) | mixed range |
+| D | `UAVs.v2i.yolov5pytorch` | Roboflow — [uavs-7l7kv/uavs-vqpqt](https://universe.roboflow.com/uavs-7l7kv/uavs-vqpqt) | mixed range |
+| E | `Drone detection.v8i.yolov5pytorch` | Roboflow — [itzak/drone-detection-6f8tk](https://universe.roboflow.com/itzak/drone-detection-6f8tk) | + bird/plane/sky hard negatives |
+| F | `Drone detection.v3i.yolov5pytorch` | Roboflow — [computer-vision-yxj4a/drone-detection-oqauc](https://universe.roboflow.com/computer-vision-yxj4a/drone-detection-oqauc) | multi-class; only `drone` kept |
+| G | `Drone Detection.v1i.yolov5pytorch` | Roboflow — [ai-bmkoo/drone-detection-inlmy](https://universe.roboflow.com/ai-bmkoo/drone-detection-inlmy) | single-class |
+| H | `Drone Detection.v6i.yolov5pytorch` | Roboflow — [drone-detection-g4d3g/drone-detection-a1tsf](https://universe.roboflow.com/drone-detection-g4d3g/drone-detection-a1tsf) | single-class |
+| I | `Drone Detection.v5i.yolov5pytorch` | Roboflow — [aatish-kumar-sahu-57emd/drone-detection-1ghph](https://universe.roboflow.com/aatish-kumar-sahu-57emd/drone-detection-1ghph) | multi-class UAV+drone → both to 0 |
 
 Kaggle sources:
 
