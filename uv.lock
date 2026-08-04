@@ -447,6 +447,7 @@ dependencies = [
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "onnx" },
+    { name = "onnxoptimizer" },
     { name = "onnxruntime" },
     { name = "opencv-python" },
     { name = "pandas" },
@@ -479,6 +480,7 @@ requires-dist = [
     { name = "matplotlib", specifier = ">=3.7.0" },
     { name = "numpy", specifier = ">=1.24,<2" },
     { name = "onnx", specifier = ">=1.16.0" },
+    { name = "onnxoptimizer", specifier = ">=0.4.2" },
     { name = "onnxruntime", specifier = ">=1.18.0" },
     { name = "opencv-python", specifier = ">=4.9.0" },
     { name = "pandas", specifier = ">=2.0.0" },
@@ -1513,6 +1515,23 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/35/e6/672fefb2f108d077f58181a7babf4c0f8d1182a30353ffc9c79c63afc5ee/onnx_ir-0.2.1.tar.gz", hash = "sha256:8b8b10a93f43e65962104de6070c43c5dacb0e3cdfefc7c8059dd83c9db64f35", size = 144279, upload-time = "2026-04-20T20:21:47.735Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8c/aa/f7a53321c60b9ad9ee184b6018292ed6b5389947592a2c8c09c736bb7f9e/onnx_ir-0.2.1-py3-none-any.whl", hash = "sha256:c7285da889312f91882de2092e298a9eeeefbfc1d1951c49d983992967eb09a7", size = 166792, upload-time = "2026-04-20T20:21:46.357Z" },
+]
+
+[[package]]
+name = "onnxoptimizer"
+version = "0.4.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "onnx" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5b/a7/e4f0e67a7e077d7cc65b968febfc53f8f52d3a22257624aa7977f14fff8c/onnxoptimizer-0.4.2.tar.gz", hash = "sha256:dac4a972b5dc80a870b930e85e4b043d090d4546d7878106ef8448e07f94622e", size = 12062394, upload-time = "2026-01-07T14:24:39.048Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f8/f4/c0eae052169bb058c847f9ed3a4c217e2a3b2f63177e370b1ee2afd2e614/onnxoptimizer-0.4.2-cp311-cp311-macosx_10_15_universal2.whl", hash = "sha256:b6aeaf03ecfa626b2e716ce910b1547d450d4b79673ab1c446fd761c05c8dcf8", size = 1219493, upload-time = "2026-01-07T14:24:29.825Z" },
+    { url = "https://files.pythonhosted.org/packages/cc/7c/99b072778f66e0f95e43874f6a2fd2b96968979e1fb644d186abbed2f2e6/onnxoptimizer-0.4.2-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:f278dc846b7144b7bdd063d0838848bdf45ce2e35d205379f169ec77deb76d9e", size = 1019369, upload-time = "2026-01-07T14:24:31.489Z" },
+    { url = "https://files.pythonhosted.org/packages/e6/5a/43b60c74ea2f3024340452962b0fbbf2300907d4e88e31847f4e67faa631/onnxoptimizer-0.4.2-cp311-cp311-win_amd64.whl", hash = "sha256:74f5400833dbdd9439d17c0fd78b962fd2ae7a369169e41e19dd09ae532350b6", size = 488155, upload-time = "2026-01-07T14:24:32.879Z" },
+    { url = "https://files.pythonhosted.org/packages/e7/e9/bedd490a39b5201d33aea1f2812ca74bba9b30defa66fc94e3d46878b8b8/onnxoptimizer-0.4.2-cp312-abi3-macosx_10_15_universal2.whl", hash = "sha256:7229ffe7d54c692e4ba0a2516f94805a4f462e7fce7634e080a381fb82ec2378", size = 1217661, upload-time = "2026-01-07T14:24:34.475Z" },
+    { url = "https://files.pythonhosted.org/packages/85/3e/d512bf70a66f85d3d7bfc79380da24c026d6409b28c5cd48f2d91e450046/onnxoptimizer-0.4.2-cp312-abi3-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:af19ee4dd7a852a18511aeabdbe1e3c8b4dd8e02b187356965b269d480ac7147", size = 1016175, upload-time = "2026-01-07T14:24:36.265Z" },
+    { url = "https://files.pythonhosted.org/packages/67/c1/173031e8e5f9185a168209ead6f8b5e985f951a817d7b7b9c62a335a1a33/onnxoptimizer-0.4.2-cp312-abi3-win_amd64.whl", hash = "sha256:cc85d031f35689d36d91e79770611015014c41278fd39b664c6ccc27dc045aa0", size = 486848, upload-time = "2026-01-07T14:24:37.57Z" },
 ]
 
 [[package]]

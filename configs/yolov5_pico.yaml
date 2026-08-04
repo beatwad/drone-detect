@@ -1,0 +1,57 @@
+# yolov5-pico: a FINN-synthesizable close-range drone detector for Zynq-7020.
+#
+# Built to the envelope proven by Cali/Falaschetti/Biagetti (Electronics 2025,
+# 14, 3993) and LPYOLO (arXiv 2207.10482), both of which run on an XC7Z020 via
+# Brevitas + FINN. Two constraints drive every choice here:
+#
+#   1. BRANCH-FREE. The Electronics paper removed all upsample and concat layers
+#      "because of FINN's current limitation in processing branched network
+#      topologies". So: no Concat, no C3/Bottleneck residual add, no Upsample,
+#      no FPN. Strictly sequential, which is what FINN's dataflow wants.
+#   2. ~350k parameters. Their working design is 350,696 params and still fills
+#      98.57% of the Z7020's BRAM at W4 (it overflowed the estimate and spilled
+#      into LUTRAM). That is the ceiling, not a target to exceed.
+#
+# Deviations from their design, both deliberate:
+#   - Downsampling by STRIDE-2 CONV rather than MaxPool. Their single worst
+#     bottleneck was StreamingMaxPool_hls_0 at the 416x416 feature map: Vitis
+#     HLS spent ~570k cycles against 216k predicted (2.6x) and that one layer
+#     cost 3.43x of overall throughput. Strided convs go through the SWG path
+#     instead and cost a few hundred parameters.
+#   - SINGLE detection head at P5/32. They lost over half their mAP to dropping
+#     one of two heads (41.76 -> 17.68 on VisDrone) with recall halving. We
+#     accept that trade because our target is a large-in-frame drone at <=10 m,
+#     i.e. near-fixed scale -- the same argument they make for fixed-altitude
+#     drone imagery. Expect long-range to collapse; close-range is the metric.
+#
+# ReLU throughout: measured free vs SiLU on this task (mAP50 0.9629 vs 0.9635)
+# and required for the QAT path.
+#
+# Anchors are a seed only -- train.py's autoanchor will re-fit them to the
+# dataset, which matters a lot with a single detection scale.
+
+nc: 1
+depth_multiple: 1.0
+width_multiple: 1.0
+activation: nn.ReLU()
+
+anchors:
+  - [30, 35, 90, 100, 200, 220] # P5/32 only
+
+backbone:
+  # [from, number, module, args]
+  [[-1, 1, Conv, [8, 3, 2]], # 0-P1/2   208x208
+   [-1, 1, Conv, [16, 3, 2]], # 1-P2/4   104x104
+   [-1, 1, Conv, [32, 3, 2]], # 2-P3/8    52x52
+   [-1, 1, Conv, [32, 3, 1]], # 3         52x52
+   [-1, 1, Conv, [64, 3, 2]], # 4-P4/16   26x26
+   [-1, 1, Conv, [64, 3, 1]], # 5         26x26
+   [-1, 1, Conv, [128, 3, 2]], # 6-P5/32   13x13
+   [-1, 1, Conv, [128, 3, 1]], # 7         13x13
+  ]
+
+head:
+  [[-1, 1, Conv, [64, 1, 1]], # 8         13x13
+   [-1, 1, Conv, [96, 3, 1]], # 9         13x13
+   [[-1], 1, Detect, [nc, anchors]], # 10  Detect(P5)
+  ]

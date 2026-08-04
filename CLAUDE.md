@@ -15,21 +15,56 @@ Full source docs live in [.claude/docs/](.claude/docs/):
 export is **board-agnostic** and done on the host GPU. Downstream work is
 unblocked now that the devkit is chosen (see Locked decisions).
 
-> **Open blocker — FINN and branched topologies.** FINN 0.10 reportedly cannot
-> compile branched graphs (concat / residual rejoin); both published Z7020 YOLO
-> implementations deleted the FPN and upsample+concat for exactly this reason.
-> yolov5n has 4 concats and 11 C3 residual adds, so this blocks it on **any**
-> board — it is a toolchain limit, not a resource limit. Untested on our FINN
-> version; the QONNX-export + FINN-frontend check is the decisive next step.
-> Fallbacks if it holds: a branch-free net (`configs/yolov5_pico.yaml`), or
-> **Vitis AI DPU** (DPUCZDX8G officially supports ZCU102, runs branched yolov5n
-> natively — unavailable on Zynq-7000).
+> **RESOLVED 2026-08-04 — FINN compiles branched YOLO. The blocker was wrong.**
+> (Was: "FINN 0.10 cannot compile branched graphs, so yolov5n is blocked on any
+> board." The Z7020 papers deleted their FPNs for *resource* reasons that got
+> retconned into a toolchain limit.) Danilowicz & Kryjak, ARC 2025
+> ([arXiv 2503.13023](https://arxiv.org/abs/2503.13023)) built branched YOLOv8n —
+> C2f split+concat, residual Bottlenecks, SPPF, full FPN — through FINN on a
+> **ZCU102**, 195.3 fps @300 MHz, W4A4, 320×192. yolov5n's **13 concats + 7 adds**
+> (4 neck + 8 C3 + 1 SPPF; adds are the 7 shortcut Bottlenecks, head C3s use
+> `shortcut=False`) are compilable. Two real costs replace the blocker:
+>
+> 1. **Joins require the branches to share a quantisation scale — set during
+>    QAT, not fixable at export.** Verified in upstream FINN
+>    `streamline/reorder.py`: `MoveLinearPastEltwiseAdd` matches
+>    `(x*C) + (y*C) -> (x + y) * C` and guards on `np.array_equal(init0, init1)`.
+>    This is algebra — `a·x + b·y` does not factor unless `a == b` — so no
+>    toolchain change avoids it. **DONE 2026-08-04** in `qat/quantize.py`
+>    (`SharedQuant` + `QuantC3`/`QuantSPPF`/`QuantBottleneck`/`QuantConcat`):
+>    all 20 joins now share one quantizer instance, verified offline by
+>    `export/check_join_scales.py` (20/20 tied) and **free** — n_eighth W8A8
+>    close 0.9830 vs 0.9845 untied, long 0.8605 vs 0.8604.
+> 2. **Concat joins have no upstream streamlining path.** `reorder.py` has no
+>    `Move{Mul,Add}PastJoinConcat` — only `MoveTransposePastJoinAdd`
+>    (`ops_to_move = ["Transpose"]`) and its base `MoveIdenticalOpPastJoinOp`.
+>    Subclassing that base with `ops_to_move = ["Mul"]` is ~10 lines, but its
+>    docstring assumes the moved op "only changes the data layout", so it likely
+>    needs a value-equality guard added.
+>
+> We need **less** patching than they did: they added a `Split` node for C2f;
+> YOLOv5's C3 has no split (cv1/cv2 are two convs on one input = a plain fork,
+> already handled by `duplicatestreams.py`). Every other primitive is upstream
+> (`concat.py`, `streamingeltwise.py`, `upsampler.py`, `streamingmaxpool.py`).
+> Their fork is **not public** and never needed to be.
+>
+> **Keep weights on-chip.** They streamed weights from DDR, which cost ~100k LUT
+> of DMA + interconnect (detector 105k / 38%, full design **205k / 75%** of the
+> ZCU102). Upstream external mem mode also carries a v0.10.1 release-note warning
+> of "unexpected behaviour". ZCU102's 32.1 Mbit makes it avoidable.
+>
+> **Vitis AI DPU** (DPUCZDX8G, officially supports ZCU102) remains available as a
+> de-risking baseline — one bitstream serves any model — but it is DDR/PS-centric
+> and 4.8–8.8 W, so it is not the deployment architecture. See Power shape.
 
-> **"Close range" is a lens question, not just a distance.** A 30 cm drone at
-> 10 m subtends 1.72° — at 60° FOV / 640 px that is **18 px**, i.e. our *long*
-> regime, not the close one. Getting a genuinely large-in-frame target at 10 m
-> needs a ~5° FOV (telephoto). Unresolved, and it decides which per-regime
-> number we actually have to hit.
+> **Target framing is a lens × crop question — and "mid" is good enough.**
+> A 30 cm drone at 10 m subtends only **1.72°**. *Resizing* a Full-HD frame to
+> 416 puts it at ~12 px at 60° FOV — at or below the measured detection floor.
+> *Centre-cropping* 416×416 out of 1920×1080 keeps native angular resolution and
+> puts it at **55 px**. Same lens, same network: undetectable → comfortable.
+> We do **not** need the *close* regime — measured **mid ≈ close** (yolov5n
+> 0.992 vs 0.989; pico 0.975 vs 0.975). Only **long** is bad (0.904 / 0.778).
+> The goal is simply to stay out of long. See open question 1.
 
 ### Host-side phases (what we're building)
 0. Scaffolding — **DONE**
@@ -41,24 +76,44 @@ unblocked now that the devkit is chosen (see Locked decisions).
 4. Brevitas QAT — **DONE** (`qat/`): **INT8 needs no fine-tuning at all**
    (W8A8 PTQ mAP50 0.9628 vs float 0.9629). 4-bit weights collapse under PTQ
    (0.197) but QAT recovers close range to 0.9856. Gate met.
-5. QONNX export (handoff to FINN) — **NOT STARTED**, and now the critical path:
-   it decides FINN-vs-DPU (see the branch blocker above).
-6. `configs/yolov5_pico.yaml` — branch-free, single-scale, 357k-param fallback
-   for FINN. Float close mAP50 **0.975** vs yolov5n's 0.989; long range 0.778 vs
-   0.904. Not yet quantized. Sized for a Z7020 budget, so ~10% of a ZCU102.
+5. QONNX export (handoff to FINN) — **UNBLOCKED 2026-08-04**. Join scales tied
+   in QAT (see above); `export/n_eighth_tied_w8a8_416.onnx` passes both gates:
+   `check_join_scales.py` 20/20 tied, `verify_qonnx.py` faithful (32/32 boxes,
+   0.367 px). FINN itself still unrun — waiting on the Vivado 2022.2 install.
+6. `configs/yolov5_pico.yaml` — branch-free, single-scale, 357k-param net. Float
+   close mAP50 **0.975** vs yolov5n's 0.989; long range 0.778 vs 0.904. Not yet
+   quantized. Sized for a Z7020 budget, so ~10% of a ZCU102. **Its rationale is
+   now largely void**: it was insurance against the branch blocker, and branches
+   compile. `configs/yolov5n_eighth.yaml` (446k params, full FPN, multi-scale)
+   beats it on every regime and was explicitly conditional on this question.
 
 ### Open questions (settle these before more model work)
-1. **Deployment FOV / lens — highest leverage, and now urgent.** Which
-   per-regime number we actually have to hit depends entirely on the optics (see
-   the lens callout above). It is urgent because it also picks the C-mount lens
-   bought alongside the camera.
-   - To resolve: fix the engagement envelope (target size, min/max range), then
-     `FOV = 2·atan(target_size / (2·range·desired_frame_fraction))`.
-   - Lands **wide (≥40°)** → we operate in the **long** regime, where pico
-     scores 0.778 vs yolov5n's 0.904 and the branch-free compromise stops being
-     cheap. Lands **narrow (≤20°)** → close/mid, and pico is fine.
-   - Second-order: a narrow FOV makes *acquisition* hard (small search cone),
-     which may imply a two-stage wide-acquire → narrow-track arrangement.
+1. **Deployment optics = lens FOV × crop.** Much less demanding than the earlier
+   "you need a ~5° telephoto" framing: since **mid ≈ close**, the only goal is to
+   stay out of the **long** regime (<1% box area). Still urgent — it picks the
+   C-mount lens bought with the camera.
+   - **Working answer: a 30–45° full-frame lens + a 416×416 centre crop** puts a
+     30 cm drone at 10 m in **mid** (1.6–3.5% area, 73–110 px). At 60° the crop
+     yields 0.87% — marginally long — so 45° or narrower. Never *resize* the
+     full frame: at 60° that gives ~12 px, at/below the detection floor.
+   - **A 416 crop beats a 640 crop.** Smaller crop = narrower effective FOV =
+     larger target fraction (at 45° full FOV: 1.55% at 416 vs 0.66% at 640).
+     Smaller input is better here, and it suits pico's **stride-32** single head,
+     which needs targets well above 32 px.
+   - Prefer **camera-side ROI** to a host-side crop: ~2.6× faster sensor readout
+     (416 vs 1080 rows), 12× less USB traffic (173 KB vs 2.07 MB), zero CPU work.
+     Cost: the window is fixed. A *steerable* crop (centred on the Kalman
+     prediction) needs full-frame transfer instead. **Unresolved fork:** fixed
+     ROI = minimum latency; moving crop = wider effective capture area.
+   - **Still open:** (a) **acquisition** — a 10–14° effective FOV is a narrow
+     search cone, and full-frame downscaled acquisition does not rescue it
+     (~12 px, below the floor); needs platform slew, an external cue, or a second
+     wide sensor. (b) exact FOV depends on sensor size *and* focal length —
+     compute once the camera is chosen. (c) **domain gap** — our val "mid"
+     images are diverse web photos, not centre crops through one fixed lens;
+     collect a few hundred real frames before trusting the numbers.
+   - Bonus: a centre crop is boresight-aligned, so the centre offset the aiming
+     subsystem consumes needs no coordinate transform.
 2. **What does pico cost once quantized?** Float close mAP50 is 0.975; W4A4 and
    W4A8 are unmeasured. ~1 h — the existing `qat/` pipeline runs on pico
    unchanged. Closes the last accuracy unknown on the FINN path. Expect
@@ -137,7 +192,8 @@ unblocked now that the devkit is chosen (see Locked decisions).
   opencv 4.11, albumentations 2.0.8, kaggle 2.2.3, numpy 1.26 (pinned <2).
 - Repo layout: `scripts/` (merge + cleaning + `center_error.py`), `configs/`,
   `training/`, `qat/` (`quantize.py` `ptq_baseline.py` `train_qat.py`
-  `evaluate.py`), `export/` (still empty), `yolov5/` (vendored).
+  `evaluate.py`), `export/` (`export_qonnx.py` `verify_qonnx.py` `finn_build.py`),
+  `yolov5/` (vendored).
   `data/` + `runs/` are gitignored.
 
 ## Gotchas / notes
