@@ -89,19 +89,40 @@ class SharedQuant(nn.Module):
 
     The tying is by object identity: `self.q` is one module, so every operand
     shares its learned scale by construction and cannot drift apart during QAT.
+
+    THE ReLU IN FRONT OF THE QUANTIZER IS A NUMERICAL NO-OP AND A FINN
+    REQUIREMENT. Measured 2026-08-05: FINN has exactly two activation handlers --
+    QuantReluHandler claims predecessors {Relu, Selu}, QuantIdentityHandler
+    claims {BatchNormalization, Sub, Add, Mul, Div, DebugMarker, None} -- and
+    `quant_act_to_multithreshold.py` FALLS BACK to QuantIdentityHandler for any
+    predecessor neither claims. That handler rejects unsigned. So the real rule
+    is: an unsigned Quant must sit immediately behind a Relu.
+
+    Without this, 36 of our Quant nodes fail: 30 preceded by another Quant (this
+    quantizer stacked on an already-quantized operand), 3 by SPPF's MaxPool, 2 by
+    the neck's Resize upsamples, 1 the graph input.
+
+    Inserting a ReLU is free because EVERY operand of every join here is already
+    non-negative: they are post-ReLU conv outputs, or MaxPool / nearest-neighbour
+    Resize of such, or a residual sum of two of them. So ReLU(t) == t exactly,
+    Uint8 stays correct, and each operand becomes Relu -> Quant, which is the
+    pattern FINN fuses into a single MultiThreshold.
     """
 
     def __init__(self, act_bit_width):
         super().__init__()
+        # one instance is fine: nn.ReLU is stateless, and each call site still
+        # exports its own Relu node
+        self.relu = nn.ReLU()
         self.q = qnn.QuantIdentity(
             act_quant=Uint8ActPerTensorFloat, bit_width=act_bit_width,
             return_quant_tensor=False)
 
     def cat(self, tensors, dim=1):
-        return torch.cat([self.q(t) for t in tensors], dim)
+        return torch.cat([self.q(self.relu(t)) for t in tensors], dim)
 
     def add(self, a, b):
-        return self.q(a) + self.q(b)
+        return self.q(self.relu(a)) + self.q(self.relu(b))
 
 
 def _adopt(dst, src):
@@ -118,7 +139,13 @@ def _adopt(dst, src):
 
 
 class QuantBottleneck(nn.Module):
-    """Bottleneck with the residual add tied to a shared scale (7 sites)."""
+    """Bottleneck with the residual add tied to a shared scale (7 sites).
+
+    No trailing ReLU here: SharedQuant already puts one directly in front of each
+    quantizer, so the Add's consumer is Relu -> Quant. Adding a second one would
+    leave a bare Relu with no Quant to fuse into, and FINN has no hardware node
+    for that.
+    """
 
     def __init__(self, b, act_bit_width):
         super().__init__()

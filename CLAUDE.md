@@ -8,54 +8,31 @@ Latency budget end-to-end ~50–100 ms. Status: **Proof of Concept**.
 Full source docs live in [.claude/docs/](.claude/docs/):
 - [project_brief.md](.claude/docs/project_brief.md) — hardware, toolchain, datasets, roadmap, risks.
 - [host_pipeline_plan.md](.claude/docs/host_pipeline_plan.md) — the phased host-side plan we're executing.
+- [build_notes.md](.claude/docs/build_notes.md) — **everything measured about QAT →
+  QONNX → FINN → bitstream.** Read this before touching `qat/`, `export/`, or
+  running a FINN build; it is where all the hard-won toolchain detail lives.
 
 ## Pipeline (target)
 `YOLOv5n (float)` → `Brevitas QAT (INT8, SiLU→ReLU)` → `QONNX export` →
 `FINN → bitstream` → `PYNQ deployment`. Everything up to and including QONNX
-export is **board-agnostic** and done on the host GPU. Downstream work is
-unblocked now that the devkit is chosen (see Locked decisions).
+export is **board-agnostic** and done on the host GPU.
 
-> **RESOLVED 2026-08-04 — FINN compiles branched YOLO. The blocker was wrong.**
-> (Was: "FINN 0.10 cannot compile branched graphs, so yolov5n is blocked on any
-> board." The Z7020 papers deleted their FPNs for *resource* reasons that got
-> retconned into a toolchain limit.) Danilowicz & Kryjak, ARC 2025
-> ([arXiv 2503.13023](https://arxiv.org/abs/2503.13023)) built branched YOLOv8n —
-> C2f split+concat, residual Bottlenecks, SPPF, full FPN — through FINN on a
-> **ZCU102**, 195.3 fps @300 MHz, W4A4, 320×192. yolov5n's **13 concats + 7 adds**
-> (4 neck + 8 C3 + 1 SPPF; adds are the 7 shortcut Bottlenecks, head C3s use
-> `shortcut=False`) are compilable. Two real costs replace the blocker:
->
-> 1. **Joins require the branches to share a quantisation scale — set during
->    QAT, not fixable at export.** Verified in upstream FINN
->    `streamline/reorder.py`: `MoveLinearPastEltwiseAdd` matches
->    `(x*C) + (y*C) -> (x + y) * C` and guards on `np.array_equal(init0, init1)`.
->    This is algebra — `a·x + b·y` does not factor unless `a == b` — so no
->    toolchain change avoids it. **DONE 2026-08-04** in `qat/quantize.py`
->    (`SharedQuant` + `QuantC3`/`QuantSPPF`/`QuantBottleneck`/`QuantConcat`):
->    all 20 joins now share one quantizer instance, verified offline by
->    `export/check_join_scales.py` (20/20 tied) and **free** — n_eighth W8A8
->    close 0.9830 vs 0.9845 untied, long 0.8605 vs 0.8604.
-> 2. **Concat joins have no upstream streamlining path.** `reorder.py` has no
->    `Move{Mul,Add}PastJoinConcat` — only `MoveTransposePastJoinAdd`
->    (`ops_to_move = ["Transpose"]`) and its base `MoveIdenticalOpPastJoinOp`.
->    Subclassing that base with `ops_to_move = ["Mul"]` is ~10 lines, but its
->    docstring assumes the moved op "only changes the data layout", so it likely
->    needs a value-equality guard added.
->
-> We need **less** patching than they did: they added a `Split` node for C2f;
-> YOLOv5's C3 has no split (cv1/cv2 are two convs on one input = a plain fork,
-> already handled by `duplicatestreams.py`). Every other primitive is upstream
-> (`concat.py`, `streamingeltwise.py`, `upsampler.py`, `streamingmaxpool.py`).
-> Their fork is **not public** and never needed to be.
->
-> **Keep weights on-chip.** They streamed weights from DDR, which cost ~100k LUT
-> of DMA + interconnect (detector 105k / 38%, full design **205k / 75%** of the
-> ZCU102). Upstream external mem mode also carries a v0.10.1 release-note warning
-> of "unexpected behaviour". ZCU102's 32.1 Mbit makes it avoidable.
->
-> **Vitis AI DPU** (DPUCZDX8G, officially supports ZCU102) remains available as a
-> de-risking baseline — one bitstream serves any model — but it is DDR/PS-centric
-> and 4.8–8.8 W, so it is not the deployment architecture. See Power shape.
+**Where we are:** the whole chain compiles. n_eighth (20 joins) goes end-to-end
+through FINN dev to estimates — 245 layers, all converted, contiguous dataflow
+block. **Bitstream is the open work**, and it is the first step that checks the
+estimates against reality. Key facts, all detailed in
+[build_notes.md](.claude/docs/build_notes.md):
+
+- **FINN compiles branched YOLO** — the old "no joins" blocker was wrong
+  (refuted 2026-08-04). Joins need their branches to share one quantisation
+  scale, which is **set during QAT** and is already done (20/20 tied, free).
+- **Use FINN dev, not v0.10.1**, for anything with joins.
+- **Folding is the whole game.** `--target-fps 30` under-folds ~11× and produces
+  unbuildable FIFOs; `export/balance_folding.py` is the fix. Preferred n_eighth
+  config: **189 FPS @100 MHz, 129k LUT est** (`mvau_wwidth_max=144`).
+- **Never use the default FIFO sizing strategy** on a joined net — both
+  automatic strategies are dead ends; use `--fifo-strategy none`.
+- Budget LUT at **×1.56 the estimate**. 75% estimated is not a safe ceiling.
 
 > **Target framing is a lens × crop question — and "mid" is good enough.**
 > A 30 cm drone at 10 m subtends only **1.72°**. *Resizing* a Full-HD frame to
@@ -66,7 +43,7 @@ unblocked now that the devkit is chosen (see Locked decisions).
 > 0.992 vs 0.989; pico 0.975 vs 0.975). Only **long** is bad (0.904 / 0.778).
 > The goal is simply to stay out of long. See open question 1.
 
-### Host-side phases (what we're building)
+## Status — host-side phases
 0. Scaffolding — **DONE**
 1. Dataset acquisition + merge — **DONE** (see `scripts/merge_dataset.py`,
    `configs/drone.yaml`, `data/drone/` + `manifest.csv`)
@@ -76,10 +53,15 @@ unblocked now that the devkit is chosen (see Locked decisions).
 4. Brevitas QAT — **DONE** (`qat/`): **INT8 needs no fine-tuning at all**
    (W8A8 PTQ mAP50 0.9628 vs float 0.9629). 4-bit weights collapse under PTQ
    (0.197) but QAT recovers close range to 0.9856. Gate met.
-5. QONNX export (handoff to FINN) — **UNBLOCKED 2026-08-04**. Join scales tied
-   in QAT (see above); `export/n_eighth_tied_w8a8_416.onnx` passes both gates:
-   `check_join_scales.py` 20/20 tied, `verify_qonnx.py` faithful (32/32 boxes,
-   0.367 px). FINN itself still unrun — waiting on the Vivado 2022.2 install.
+5. QONNX export (handoff to FINN) — **DONE**. `export/n_eighth_tied_w8a8_416.onnx`
+   passes both gates: `check_join_scales.py` 20/20 tied, `verify_qonnx.py`
+   faithful (32/32 boxes, 0.367 px).
+5b. FINN build (estimates) — **DONE 2026-08-05**. pico on v0.10.1 (19,472 LUT /
+   193 BRAM), n_eighth on FINN dev (77,927 LUT / 348 BRAM / 3 DSP at the
+   `--target-fps 30` floor; 129,462 LUT at the preferred 189 FPS point).
+5c. FINN build (bitstream) — **OPEN.** Three failed attempts so far, all in FIFO
+   sizing or stitching; the path forward is balanced folding + `--fifo-strategy
+   none`. See build_notes §5.
 6. `configs/yolov5_pico.yaml` — branch-free, single-scale, 357k-param net. Float
    close mAP50 **0.975** vs yolov5n's 0.989; long range 0.778 vs 0.904. Not yet
    quantized. Sized for a Z7020 budget, so ~10% of a ZCU102. **Its rationale is
@@ -87,7 +69,7 @@ unblocked now that the devkit is chosen (see Locked decisions).
    compile. `configs/yolov5n_eighth.yaml` (446k params, full FPN, multi-scale)
    beats it on every regime and was explicitly conditional on this question.
 
-### Open questions (settle these before more model work)
+## Open questions (settle these before more model work)
 1. **Deployment optics = lens FOV × crop.** Much less demanding than the earlier
    "you need a ~5° telephoto" framing: since **mid ≈ close**, the only goal is to
    stay out of the **long** regime (<1% box area). Still urgent — it picks the
@@ -137,9 +119,8 @@ unblocked now that the devkit is chosen (see Locked decisions).
   2026-08-03. 274,080 LUT / 32.1 Mbit BRAM (912×36Kb, **no URAM**) / 2,520
   DSP48E2; PS = 4× Cortex-A53 @1.2 GHz + 2× Cortex-R5F @500 MHz; 2× FMC HPC and
   **no native MIPI** (MIPI would need a camera FMC module — but see the camera
-  decision below). Devkit-specific work (FINN part-targeting, PYNQ image,
-  camera, actuator) is now unblocked. This board is deliberately oversized —
-  experiment freely, but do NOT let its headroom drive architecture decisions.
+  decision below). This board is deliberately oversized — experiment freely, but
+  do NOT let its headroom drive architecture decisions.
   *PS = Processing System (hard ARM cores + hard peripherals: DDR, USB, GEM,
   I2C…). PL = Programmable Logic (the fabric). They talk over AXI: HP ports for
   bandwidth, GP ports for control.*
@@ -190,18 +171,18 @@ unblocked now that the devkit is chosen (see Locked decisions).
   (Earlier work was done on a GTX 1070, 8 GB — old batch sizes reflect that.)
 - Key libs: brevitas 0.13.0, qonnx 1.0.0, onnx 1.22, onnxruntime 1.27,
   opencv 4.11, albumentations 2.0.8, kaggle 2.2.3, numpy 1.26 (pinned <2).
+- **FPGA toolchain:** Vivado/Vitis/Vitis HLS **2022.2** at `/home/alex/Xilinx`;
+  FINN cloned twice at `~/Repos/finn` (v0.10.1) and `~/Repos/finn-dev` (dev, use
+  this one for joined nets). Both have setup gotchas that will waste hours if
+  rediscovered — see [build_notes.md](.claude/docs/build_notes.md) §7.
 - Repo layout: `scripts/` (merge + cleaning + `center_error.py`), `configs/`,
   `training/`, `qat/` (`quantize.py` `ptq_baseline.py` `train_qat.py`
-  `evaluate.py`), `export/` (`export_qonnx.py` `verify_qonnx.py` `finn_build.py`),
-  `yolov5/` (vendored).
+  `evaluate.py`), `export/` (`export_qonnx.py` `verify_qonnx.py`
+  `check_join_scales.py` `finn_transforms.py` `finn_build.py`
+  `balance_folding.py`), `yolov5/` (vendored).
   `data/` + `runs/` are gitignored.
 
 ## Gotchas / notes
-- **Shared SiLU instance:** YOLOv5 uses one class-level `Conv.default_act =
-  nn.SiLU()` shared across ALL Conv layers, so `model.modules()` reports a
-  single SiLU. The QAT SiLU→ReLU swap is done by rebinding `Conv.default_act`
-  (or walking `.act` attributes) before instantiation — not per-layer object
-  replacement.
 - **conda shell warning:** the user's shell has `VIRTUAL_ENV=~/anaconda3`
   active; uv ignores it and correctly uses `.venv`. Harmless. Prefer `uv run`.
 - **onnxruntime `/sys/class/drm/card0` warning:** cosmetic GPU-discovery noise;
@@ -214,6 +195,9 @@ unblocked now that the devkit is chosen (see Locked decisions).
   `manifest.csv` `regime` column). Merged set: 5345 pairs but only ~2891 unique
   pHash-clusters (46% near-dup video frames); split is cluster-safe (no near-dup
   train/val leakage). See memory `dataset-regimes`.
+- **Quantization/FINN gotchas** (shared SiLU instance, tied join scales, the
+  ReLU-before-Quant rule, the `set_folding` patch that must survive `git pull`)
+  are all in [build_notes.md](.claude/docs/build_notes.md).
 
 ## Conventions
 - Commit/push only when the user asks.
