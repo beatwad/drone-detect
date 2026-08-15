@@ -1,0 +1,68 @@
+# yolov8n as it is ACTUALLY BUILT on the ZCU102 — ReLU6 variant — the live subgraph of the
+# reference `quantyolov8_4w4a_comact_tidy.onnx`, reproduced one-to-one.
+#
+# Two deviations from stock yolov8.yaml, both read off the compiled graph rather
+# than chosen (see build_notes §10.3 and the layer map below):
+#   1. NO bottom-up PAN path. Stock layers 16-21 (Conv/Concat/C2f ×2) feed only
+#      the P4/P5 prediction heads, which the reference leaves unwired — so all of
+#      them are dead logic. Backbone + top-down FPN (0-15) is what runs.
+#   2. Detect takes ONE input, layer 15 (P3/8). Single-scale, stride 8.
+# Plus `activation: nn.ReLU6()`. The reference does not merely use an unsigned
+# activation — it uses ONE COMMON activation range for the whole network. Every
+# live scalar activation scale in its graph is one of exactly two values:
+# 34x 0.40000004 = 6/15 (the UINT4 sites) and 5x 0.02352941 = 6/255 (the UINT8
+# sites). Same range [0, 6], different bit width. That is what "comact" in
+# `quantyolov8_4w4a_comact` means: common activation.
+#
+# So the network must be TRAINED INTO [0, 6]. Measured on our plain-ReLU run
+# (runs/train/v8n_p3_relu): all 39 Conv blocks exceed 6, median site max 21.7,
+# and 10-13% of values in the early layers are above it. Quantizing that to a
+# fixed [0, 6] range would clip most of the signal away.
+#
+# The payoff is large: with one common activation range every join is consistent
+# by construction, so none of the SharedQuant scale-tying machinery that
+# qat/quantize.py needs for yolov5 is required here.
+#
+# Verified against the ONNX by scripts/check_v8_topology.py: 41/41 live Conv
+# weight shapes identical, in order.
+#
+# The head must stay LEGACY (Conv 3x3 -> Conv 3x3 -> Conv2d 1x1). parse_model
+# sets Detect.legacy=True for v8 yamls; the newer DWConv head would be a
+# different graph and a depthwise op FINN has no reason to like.
+#
+# The scale ('n') is inferred from this file's STEM by guess_model_scale's regex
+# `yolo(e-)?[v]?\d+([nslmx])` — do not rename to something it cannot match.
+
+activation: nn.ReLU6()
+
+# Parameters
+nc: 80 # number of classes
+scales: # model compound scaling constants
+  # [depth, width, max_channels]
+  n: [0.33, 0.25, 1024]
+
+# YOLOv8.0n backbone — unchanged from stock
+backbone:
+  # [from, repeats, module, args]
+  - [-1, 1, Conv, [64, 3, 2]] # 0-P1/2
+  - [-1, 1, Conv, [128, 3, 2]] # 1-P2/4
+  - [-1, 3, C2f, [128, True]]
+  - [-1, 1, Conv, [256, 3, 2]] # 3-P3/8
+  - [-1, 6, C2f, [256, True]]
+  - [-1, 1, Conv, [512, 3, 2]] # 5-P4/16
+  - [-1, 6, C2f, [512, True]]
+  - [-1, 1, Conv, [1024, 3, 2]] # 7-P5/32
+  - [-1, 3, C2f, [1024, True]]
+  - [-1, 1, SPPF, [1024, 5]] # 9
+
+# Top-down FPN only — stock layers 10-15, then straight to a single P3 head
+head:
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]
+  - [[-1, 6], 1, Concat, [1]] # cat backbone P4
+  - [-1, 3, C2f, [512]] # 12
+
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]
+  - [[-1, 4], 1, Concat, [1]] # cat backbone P3
+  - [-1, 3, C2f, [256]] # 15 (P3/8-small)
+
+  - [[15], 1, Detect, [nc]] # Detect(P3) — single scale, stride 8

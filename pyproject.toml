@@ -39,6 +39,7 @@ dependencies = [
     "ipywidgets>=8.1.8",
     "wandb>=0.28.1",
     "onnxoptimizer>=0.4.2",
+    "ultralytics>=8.3.0,<8.4",
 ]
 
 [[tool.uv.index]]

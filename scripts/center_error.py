@@ -54,22 +54,91 @@ def gt_boxes(img_path, w, h):
     return np.array(out) if out else np.zeros((0, 4))
 
 
-def run(weights, paths, imgsz, device):
+def load_any(weights, device):
+    """Return (model, stride) for either a float checkpoint or a QAT one.
+
+    QAT checkpoints hold a state_dict rather than a pickled model (Brevitas builds
+    its quantizer classes at runtime and they do not pickle), so `attempt_load`
+    inside DetectMultiBackend dies with KeyError: 'model'. Rebuild the quantized
+    graph at the recorded bit widths instead, mirroring qat/evaluate.py.
+    """
+    ck = torch.load(weights, map_location='cpu', weights_only=False)
+    if isinstance(ck, dict) and 'state_dict' in ck and 'weight_bits' in ck:
+        sys.path.insert(0, str(ROOT))
+        from qat.quantize import load_and_quantize  # noqa: E402
+        # Build and load on CPU, then move: Brevitas caches scale tensors as plain
+        # attributes, not buffers, so a .to() before load_state_dict strands them.
+        model, _ = load_and_quantize(ck['float_weights'], ck['weight_bits'],
+                                     ck['act_bits'], 'cpu')
+        model.load_state_dict(ck['state_dict'], strict=False)
+        model = model.to(device).eval()
+        return model, int(model.stride.max())
     model = DetectMultiBackend(weights, device=device, fp16=False)
-    stride = int(model.stride)
-    errs = []
-    for p in paths:
-        im0 = cv2.imread(p)
-        if im0 is None:
-            continue
-        h, w = im0.shape[:2]
+    return model, int(model.stride)
+
+
+def checkpoint_kind(weights):
+    """'v8', 'v8_qat', or 'v5' — the three checkpoint families in this repo.
+
+    v8 pickles its graph as `ultralytics.nn.tasks.*`, an unambiguous marker.
+    v8_qat (qat/train_qat_v8.py) carries a state_dict plus the bit widths, since
+    Brevitas' runtime-generated quantizer classes do not pickle safely.
+    """
+    ck = torch.load(weights, map_location='cpu', weights_only=False)
+    if isinstance(ck, dict) and 'state_dict' in ck and 'low_bits' in ck:
+        return 'v8_qat'
+    m = ck.get('model') if isinstance(ck, dict) else None
+    return 'v8' if type(m).__module__.startswith('ultralytics') else 'v5'
+
+
+def predictor(weights, imgsz, device):
+    """Return f(img_path, im0) -> xyxy boxes in ORIGINAL image pixels, conf>=CONF.
+
+    Both backends letterbox to `imgsz` and scale back, so the boxes the matcher
+    sees are defined identically and the two families stay comparable.
+    """
+    kind = checkpoint_kind(weights)
+
+    if kind in ('v8', 'v8_qat'):
+        from ultralytics import YOLO
+        if kind == 'v8':
+            model = YOLO(weights)
+        else:
+            sys.path.insert(0, str(ROOT))
+            from qat.train_qat_v8 import load_qat_checkpoint  # noqa: E402
+            qm, ck = load_qat_checkpoint(weights, device)     # CPU-load, then move
+            model = YOLO(ck['float_weights'])                 # reuse its args/names
+            qm.args = model.model.args
+            model.model = qm
+
+        def predict(p, im0):
+            r = model.predict(p, imgsz=imgsz, conf=CONF, iou=IOU_NMS,
+                              device=device, max_det=300, verbose=False)[0]
+            return r.boxes.xyxy.cpu().numpy()
+        return predict
+
+    model, stride = load_any(weights, device)
+
+    def predict(p, im0):
         im = letterbox(im0, imgsz, stride=stride, auto=False)[0]
         t = torch.from_numpy(im[:, :, ::-1].transpose(2, 0, 1).copy()).float().div(255)[None].to(device)
         with torch.no_grad():
             det = non_max_suppression(model(t), CONF, IOU_NMS, max_det=300)[0]
         if len(det):
             det[:, :4] = scale_boxes(t.shape[2:], det[:, :4], im0.shape).round()
-        pred = det[:, :4].cpu().numpy() if len(det) else np.zeros((0, 4))
+        return det[:, :4].cpu().numpy() if len(det) else np.zeros((0, 4))
+    return predict
+
+
+def run(weights, paths, imgsz, device):
+    predict = predictor(weights, imgsz, device)
+    errs = []
+    for p in paths:
+        im0 = cv2.imread(p)
+        if im0 is None:
+            continue
+        h, w = im0.shape[:2]
+        pred = predict(p, im0)
         gt = gt_boxes(p, w, h)
         if len(pred) == 0 or len(gt) == 0:
             continue
@@ -93,16 +162,23 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--weights', nargs='+', required=True)
     ap.add_argument('--regimes', default='close,mid,long')
-    ap.add_argument('--imgsz', type=int, default=416)
+    # accepts 320 or 'H,W'. Ultralytics' val() silently rounds a [h, w] to an
+    # int ('train and val imgsz must be an integer'); only predict honours a
+    # rectangle, and this script goes through predict — so this is the only
+    # way to score a model at the non-square shape the bitstream will run.
+    ap.add_argument('--imgsz', default='416',
+                    help="square size, or 'H,W' for a rectangular input")
     ap.add_argument('--device', default='0')
     args = ap.parse_args()
     device = select_device(args.device)
+    imgsz = ([int(v) for v in args.imgsz.split(',')] if ',' in args.imgsz
+             else int(args.imgsz))
 
     print(f'{"model":<24} {"regime":<7} {"mean_px":>8} {"p95_px":>8} {"mean_frac":>10} {"p95_frac":>9} {"n_TP":>6}')
     for w in args.weights:
         for reg in args.regimes.split(','):
             paths = [l.strip() for l in (ROOT / f'configs/val_{reg}.txt').read_text().splitlines() if l.strip()]
-            e = run(w, paths, args.imgsz, device)
+            e = run(w, paths, imgsz, device)
             name = Path(w).parts[-3]
             if len(e) == 0:
                 print(f'{name:<24} {reg:<7} {"-":>8} {"-":>8} {"-":>10} {"-":>9} {0:>6}')

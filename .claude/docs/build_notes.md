@@ -131,10 +131,31 @@ real bitfiles) for the `auto_fifo_depths=False` precedent and a board-side
 inference notebook. Memory `finn-yolo-reference-repos`.
 
 ### Keep weights on-chip
-The reference streamed weights from DDR, which cost ~100k LUT of DMA +
-interconnect (detector 105k / 38%, full design **205k / 75%** of the ZCU102).
-Upstream external mem mode also carries a v0.10.1 release-note warning of
-"unexpected behaviour". ZCU102's 32.1 Mbit makes it avoidable.
+**CORRECTED 2026-08-07 — the reference design is FULLY ON-CHIP, not DDR.** This
+section previously claimed "the reference streamed weights from DDR, which cost
+~100k LUT of DMA + interconnect (detector 105k / 38%, full design 205k / 75%)".
+Checked against their actual artifacts, that is wrong:
+
+- **All 63 MVAUs are `mem_mode: internal_decoupled`** in every one of their config
+  files (`final_hw_config_90fps.json`, `final_hw_config.json`,
+  `yolov8_output_dir/*`). FINN's own source
+  (`matrixvectoractivation.py:86-93`) defines this as *"streaming weights with
+  streamer packaged **inside** the IP"*. The off-chip modes are `external` /
+  `external_mem`, which appear **nowhere** in their configs or build script.
+- **Their BRAM budget confirms it independently:** weights are
+  2,250,240 × 4b + 895,920 × 8b = **16.17 Mbit**; they allocate **1,064 BRAM_18K
+  = 18.7 Mbit** (58% of the part). That is the whole weight set held on-chip plus
+  activation buffers. A DDR-streaming design would not need 58% of block RAM.
+
+The 105k/205k LUT figures may come from the ARC paper itself (**which we do not
+have a copy of** — only the Electronics/Z7020 one), but the published repo build
+is unambiguously on-chip.
+
+**This is good news:** the reference reached 195.3 FPS @300 MHz on a ZCU102
+**without** spending ~100k LUT on DMA + interconnect, so that overhead is not a
+cost we must plan around. Keep weights on-chip — ZCU102's 32.1 Mbit makes it easy,
+and upstream external mem mode also carries a v0.10.1 release-note warning of
+"unexpected behaviour".
 
 ### Vitis AI DPU as a fallback
 DPUCZDX8G officially supports ZCU102 and remains available as a de-risking
@@ -357,12 +378,36 @@ sizes each consumer from `io_chrc_in[0]` **only**, so a node joining two live
 streams cannot be sized. Our **7 residual adds** are exactly that. Not fixable by
 config; fine for join-free nets like pico.
 
-**So both automatic strategies are dead ends for n_eighth.** `--fifo-strategy` now
-selects between them; the remaining option is `none` (`auto_fifo_depths=False`),
-which leaves `InsertFIFO`'s shallow defaults — reaches synthesis fastest and keeps
-Fmax valid, but understates FIFO BRAM (utilisation becomes a **floor**) and may
-deadlock or miss target throughput. A measurement vehicle, not a deployable
-accelerator.
+**SUPERSEDED 2026-08-06 — `largefifo_rtlsim` was not the problem; unbalanced
+folding was.** This section originally concluded "both automatic strategies are
+dead ends, use `none`". The first half is wrong. Re-run on pico with a balanced
+folding config (§C4) and the *default* `largefifo_rtlsim` sized every FIFO
+happily:
+
+| | unbalanced | balanced |
+|---|---|---|
+| deepest FIFO | 289,032 | **1,627** |
+| 2nd deepest | 243,514 | 1,515 |
+| sum of all depths | 565,670 | **11,255** |
+| over Vivado's 32,768 max | 2 | **none** |
+
+178× shallower. Those two giant buffers existed only to absorb the 6× rate
+mismatch `--target-fps 30` created; flatten the pipeline and the need disappears.
+The build walked straight through the step that had killed the previous attempt.
+
+**What is still true:**
+- `characterize` remains a genuine dead end on **joined** nets — the guard above
+  is structural, not a tuning issue. Fine for join-free nets like pico.
+- The **stitch cost is unchanged**. Balancing does *not* shrink the block design:
+  balanced pico stitched 118 cells vs 114 unbalanced, because the FIFO *count* is
+  the same (57) — `RemoveShallowFIFOs` uses `shallow_threshold=0`, so none are
+  dropped; only depths shrink. `largefifo_rtlsim` still stitches TWICE.
+- So `--fifo-strategy none` is still worth choosing on n_eighth, but for **time**
+  (one stitch instead of two, ~13.8 h vs ~27 h) — not because the default is
+  broken. Its cost stands: FIFO BRAM excluded, so utilisation is a floor.
+
+**Caveat on the evidence:** pico has **0 joins**. Balanced folding + the default
+strategy is proven on pico, NOT yet on n_eighth's 20 joins.
 
 **`none` has third-party precedent.** `UviDTE-FPSoC/daiedge-fpga` builds TinyYOLOv3
 for PYNQ-Z1/Z2 and ZCU104 with exactly `auto_fifo_depths=False` +
@@ -605,6 +650,614 @@ to BRAM first.
 **Bitstream.** Estimate mode has given all it can (§C). The open path is:
 balanced folding config from §C4 (189 FPS point, `mvau_wwidth_max=144`,
 `standalone_thresholds=False`) + `--fifo-strategy none` + `NUM_DEFAULT_WORKERS=10`,
-accepting ~13.8 h of stitching. Dump `final_hw_config.json` the moment anything
-completes. The numbers to check against reality: LUT (expect ~×1.56 the estimate),
-achieved Fmax, and true latency via `RTLSIM_PERFORMANCE`.
+accepting ~13.8 h of stitching. (`none` for the one-stitch time saving — the
+default `largefifo_rtlsim` now *works* once folding is balanced, it just stitches
+twice.) Dump `final_hw_config.json` the moment anything completes. The numbers to
+check against reality: LUT (expect ~×1.56 the estimate), achieved Fmax, and true
+latency via `RTLSIM_PERFORMANCE`.
+
+**Two things learned the hard way on 2026-08-06, both now handled in
+`finn_build.py`:**
+- **The licence does not reach the container.** `run-docker.sh` mounts
+  `FINN_XILINX_PATH`, the build dir and `.ssh` — but **not `~/.Xilinx`**, and it
+  never sets `XILINXD_LICENSE_FILE`. Estimates, HLS and stitching need no
+  Synthesis feature, so this stays invisible until the first in-container
+  `synth_design`, which then dies with
+  `ERROR: [Common 17-345] A valid license was not found for feature 'Synthesis'`.
+  Pass `-v $HOME/.Xilinx:$HOME/.Xilinx -e XILINXD_LICENSE_FILE=$HOME/.Xilinx/Xilinx.lic`
+  via `FINN_DOCKER_EXTRA`.
+- **Resume instead of rebuilding.** `--start-step phase_generate_outputs` (dev
+  takes PHASE names) re-runs only stitch + synthesis from
+  `intermediate_models/phase_build_hardware.onnx`, turning a 4.5 h redo into
+  ~45 min. Needs the same `--out` directory.
+
+---
+
+## 9. GROUND TRUTH: FINN's LUT estimate is ×2.73 low (measured 2026-08-06)
+
+First design ever taken through real Vivado synthesis: **pico, balanced folding,
+572 FPS config** (`mvau_wwidth_max=144`, 174,726 cycles). Synthesis completed;
+**place-and-route refused the design.**
+
+| | FINN estimate | Vivado post-synth | ratio |
+|---|---|---|---|
+| **LUT as Logic** | 118,916 | **324,702 (118.5%)** | **×2.73** |
+| CLB LUTs (incl. LUT-as-memory) | — | 344,766 (125.8%) | — |
+| CARRY8 | — | 35,715 (104.3%) | — |
+| CLB Registers | — | 205,935 (37.6%) | — |
+| BRAM (18K equiv) | 255 | 372 | ×1.46 |
+| DSP | 2 | 7 | — |
+
+    ERROR: [DRC UTLZ-1] LUT as Logic over-utilized: requires 332,652,
+    only 274,080 available.  ERROR: [Vivado_Tcl 4-23] Placer not run.
+
+**The ×1.56 from Electronics 2025 14:3993 does not transfer, and it is obvious in
+hindsight why:** their design put its MACs in **DSPs** (204 of 220, RTL MVAU with
+packing). Ours puts every MAC in **LUTs** (`MVAU_hls`, `resType: lut`, 7 DSPs of
+2,520). We are measuring the cost of doing 8-bit multiply-accumulate in fabric.
+
+**Budget rule: keep estimated LUT under ~70,000** for a ~70% real fit. Search with
+`balance_folding.py --headroom 0.27` (0.75 / 2.73) rather than the 0.75 default.
+
+**What actually fits on a ZCU102 at ×2.73:**
+
+| config | est LUT | real LUT | verdict |
+|---|---|---|---|
+| pico balanced 572 FPS | 118,916 | 324,702 (118%) | **NO — measured** |
+| pico balanced 257 FPS | 101,418 | 276,923 (101%) | no |
+| pico @283 FPS | 66,130 | 180,569 (66%) | yes |
+| pico @144 FPS | 41,401 | 113,046 (41%) | comfortable |
+| n_eighth `target_fps 30` (32 FPS) | 77,927 | 212,781 (78%) | marginal |
+| n_eighth balanced 85.6 FPS | 99,076 | 270,529 (99%) | no |
+| **n_eighth balanced 189 FPS** | 129,462 | **353,498 (129%)** | **NO** |
+| n_eighth @24 FPS | 77,434 | 211,435 (77%) | marginal |
+| n_eighth @16 FPS | 73,959 | 201,946 (74%) | yes |
+
+**So n_eighth tops out at roughly 24–32 FPS on a ZCU102 with this architecture** —
+not the 189 FPS §C4 recommended. That recommendation is withdrawn.
+
+**This REOPENS §C5 (DSP packing), which was closed on uncalibrated numbers.** The
+conclusion "standalone_thresholds is not worth it below ~220 FPS" compared two LUT
+*estimates*, and we now know the LUT estimate is the unreliable one — precisely
+because our MACs live in LUTs. Moving compute to DSPs attacks the exact resource
+that is over budget, and the standalone-thresholds sweep showed LUT going **flat
+at ~144.7k** while DSP scaled 60 → 822. Whether that flat number carries the same
+×2.73 is unknown and worth measuring: if its LUT is fixed overhead rather than
+compute, the multiplier may be much smaller. **Do not re-close §C5 without a
+synthesis run.**
+
+**Also learned:** `CARRY8` hit 104% — a resource FINN does not model at all.
+Watch it; adders and accumulators generate carry chains that no estimate predicts.
+
+### 9.1 The ZCU102 is not the problem — our arithmetic is
+
+Direct comparison against the reference YOLOv8n ZCU102 build (`mdanilow/finn`
+`yolov8_dev`, `notebooks/experiments/yolov8/yolov8_output_dir/`):
+
+| | reference YOLOv8n | our n_eighth |
+|---|---|---|
+| input | 320×192 | 416×416 |
+| **total MACs** | **2,622,873,600** | 238,081,792 (**11× less**) |
+| layers | 259 | 245 |
+| quantisation | W4A4 mixed | W8A8 |
+| MVAU impl | **63 × `MVAU_rtl`** | 57 × `MVAU_hls`, `resType: lut` |
+| **DSP** | **603** | **3–7** |
+| LUT (est) | 140,751 | 77,927–129,462 |
+| clock | 300 MHz | 100 MHz |
+| FPS | 195.3 | 32 |
+
+**They run 11× our compute for the same LUT.** It is not architecture — their layer
+count is *higher*. It is that their multiplies live in 603 DSPs at 4 bits and ours
+live in LUT fabric at 8 bits.
+
+Their hand-tuned `final_hw_config_90fps.json`: all 63 MVAUs `resType: 'auto'`,
+`mem_mode: internal_decoupled`, and **PE = 1–4, SIMD = 9**. They barely unfold —
+throughput comes from 300 MHz + DSP packing, not parallelism. Our
+`balance_folding.py` was buying FPS with the most expensive resource on the chip.
+
+**SIMD=9 is `mvau_wwidth_max / weight_bits` = 36/4** — independent confirmation of
+the §C4 finding. W8 gets 4, W4 gets 9.
+
+**DSPs are not 4-bit-only** (a DSP48E2 is a 27×18 multiplier). Bit width sets
+*packing density*, per the Z7020 paper Table 4 — RTL DSP48E2: **4 MAC/DSP at W4A4,
+2 MAC/DSP at W8A8**, HLS: 1 MAC/DSP with no packing either way. Our 7 DSPs are
+caused by `MVAU_hls` + `resType: lut`, **not** by being 8-bit.
+
+**Measured ceiling of the current architecture:** `balance_folding --headroom 0.27`
+(i.e. against the real ×2.73 LUT) picks **16.1 FPS** for n_eighth at 73,959 est /
+~202k real LUT (74%). Anything faster overflows the part. **16 FPS is below
+requirement, so W4 + RTL MVAU is not an optimisation — it is the only route to a
+usable frame rate on this board.**
+
+**Plan (each factor is multiplicative, all four are currently set the expensive
+way):**
+1. **W4 weights** — SIMD 4→9 free; 2→4 MAC/DSP if activations are also 4-bit.
+2. **`standalone_thresholds=True` + `resType auto`** → RTL MVAU → multiplies leave
+   the LUTs. Reopens §C5, which was closed on uncalibrated W8A8 numbers.
+3. **200–300 MHz** — the reference ran 300 on this exact part; we assumed 100.
+4. **Modest folding (PE 1–4)** — stop buying FPS with LUTs.
+
+**Accuracy gate first.** n_eighth **W4A8** is measured (QAT close-range 0.9856).
+Full **W4A4** — which is what unlocks 4 MAC/DSP — is **unmeasured on n_eighth**,
+and on pico 8-bit beat 4-bit on every regime (memory `pico-w8a8-beats-w4a8`). So
+run W4A4 QAT before banking the 4 MAC/DSP figure; W4A8 alone still gives SIMD 9
+and 2 MAC/DSP.
+
+### 9.2 W4A4 QAT on n_eighth — MEASURED 2026-08-07, and it passes
+
+Run: `qat/train_qat.py --weights runs/train/n_eighth_416/weights/best.pt
+--weight-bits 4 --act-bits 4 --imgsz 416`, 30 epochs, best at epoch 27 →
+`runs/qat/n_eighth_qat_w4a4/best.pt`. All **20 joins stayed tied** through the
+switch, so the FINN precondition survives at 4 bits.
+
+**W4A4 PTQ collapses** (close 0.558 vs 0.983) — 4-bit needs QAT, as expected.
+
+Per-regime, W8A8 vs W4A4 QAT (both `--imgsz 416`):
+
+| regime | W8A8 mAP50 | W4A4 mAP50 | Δ | W8A8 mAP50-95 | W4A4 mAP50-95 |
+|---|---|---|---|---|---|
+| **close** | 0.9845 | **0.9738** | **−1.1 pt** | 0.6793 | 0.5812 |
+| **mid** | 0.9777 | **0.9295** | −4.8 pt | 0.6352 | 0.5060 |
+| long | 0.8608 | 0.6859 | −17.5 pt | 0.4727 | 0.2874 |
+| overall | 0.9294 | 0.8450 | −8.4 pt | 0.5752 | 0.4402 |
+
+Loss scales inversely with target size — 4-bit activations wash out the fine
+spatial gradients small objects depend on. The long-range collapse lands in the
+regime the optics plan already designs away.
+
+**Centre error (`scripts/center_error.py`) — the metric that actually matters,
+since mAP50-95 is dominated by box extent, not centre:**
+
+| model | regime | mean px | p95 px | mean frac | n_TP |
+|---|---|---|---|---|---|
+| W8A8 | close | 15.30 | 49.93 | 0.0151 | 1610 |
+| **W4A4** | close | **17.71** | 52.73 | 0.0176 | 1554 |
+| W8A8 | mid | 6.44 | 21.42 | 0.0061 | 1755 |
+| **W4A4** | mid | **7.73** | 24.07 | 0.0074 | 1676 |
+
++2.4 px at close (~16%), but only **+0.0025 of frame width** — about **+0.04° of
+aim error** at the 10–14° effective FOV, ~+0.11° at 45°. CLAUDE.md already
+accepted +0.26° choosing between pico and yolov5n. `n_TP` differs by 3–5%, so the
+comparison is fair.
+
+**VERDICT: W4A4 is good enough.** The mAP50-95 drop is box-extent sloppiness, not
+centre displacement. Costs ~1 pt close-range mAP50 and <0.1° aim error; buys
+**SIMD 9 (vs 4)** and **4 MAC/DSP (vs 1)** — the two levers that lift n_eighth off
+its measured 16 FPS ceiling (§9).
+
+**Not measured: n_eighth W4A8.** The 0.9856 figure elsewhere in this repo is from
+the *yolov5n* phase-4 work, not n_eighth. W4A8 remains the conservative fallback
+(8-bit activations, still SIMD 9, but 2 MAC/DSP not 4) if W4A4 ever proves
+insufficient in the field.
+
+**Tooling:** `scripts/center_error.py` gained a `load_any()` branch — QAT
+checkpoints hold a state_dict, not a pickled model, so `attempt_load` inside
+`DetectMultiBackend` dies with `KeyError: 'model'`. It now rebuilds the quantized
+graph via `load_and_quantize` when it sees `{state_dict, weight_bits}`.
+
+---
+
+## 10. Reference YOLOv8n on ZCU102 — use the AUTHORS' fork, 2026-08-10
+
+**The single most important fact: neither FINN checkout works alone.**
+`~/Repos/finn-dev` builds the HLS fine but dies assembling the Zynq shell;
+`~/Repos/finn-mdanilow` (their fork) does the reverse. The working combination is
+**their fork + one file from dev's finn-hlslib**.
+
+### 10.1 finn-dev is ~2000 commits past what the reference validated
+Their branch `yolov8_dev` bases on FINN `60ccf026` (2025-08-28). Running their
+`build_yolov8.py` on our finn-dev needed three hand patches, and then failed
+anyway:
+- `ApplyConfig` moved `qonnx.transformation.general` → `finn.transformation.general`
+- `step_make_pynq_driver` renamed `step_make_driver`
+- **`InferAddStreamsLayer` was generalised** and now absorbs the tail `Mul`/`Add`
+  into `ElementwiseMul`/`ElementwiseAdd`. That strands each output `Transpose` as
+  a lone non-FINN node *between* hw nodes, and
+  `step_create_dataflow_partition` asserts *"cycle-free graph violated: partition
+  depends on itself"*. On their pin the tail stays float and partitions out
+  cleanly with the Transposes. Dev also has `step_transpose_decomposition`, which
+  is probably the supported fix.
+- **Then: `ERROR: [BD 5-336] ... locked IPs: top_StreamingDataflowPartition_1_0`
+  at `make_zynq_proj.py:284`, 36 h in.** This was **NOT** a dev-drift bug — it
+  reproduced identically on the authors' fork. Root cause and fix in §10.6. Note
+  `report_ip_status` on a re-opened project is **useless** — the `.xpr` persists
+  *zero* `ip_repo_paths` (all 700+ are set in-memory by `ip_config.tcl`), so a
+  re-open reports "IP definition not found" regardless.
+
+### 10.2 Their fork's finn-hlslib predates a fix it needs — ALL concats crash
+`ipgen` fails on **every one of the 10 `StreamingConcat` layers** (33 other HLS
+layers and 136 RTL layers are fine), with
+`clang: error: unable to execute command: Segmentation fault`. Not datatype- or
+size-related: it hits `ap_uint<4>` 3-input concats and `ap_int<21>` 2-input alike.
+
+**Cause:** their pin `HLSLIB_COMMIT=a9d64bc0` predates upstream `7ab5ad9`
+(2025-07-14) *"Explicit inlining to help Vitis HLS 2022.2 to process code"*,
+which adds `#pragma HLS inline` to the two `PackReader::read_nb` methods in
+`concat.hpp`. Without them the recursive variadic template segfaults the frontend.
+
+**Fix (REQUIRED, and fragile):**
+```
+cp ~/Repos/finn-dev/deps/finn-hlslib/concat.hpp \
+   ~/Repos/finn-mdanilow/deps/finn-hlslib/concat.hpp
+```
+Signatures are identical; only the two pragmas differ. `fetch_repo` compares the
+commit hash and skips, so the edit survives — but a **pin change or fresh clone
+silently loses it**, exactly like the `set_folding.py` patch. Original kept at
+`concat.hpp.orig`. Result after patching: **43/43 HLS layers, 10/10 concats, 0
+failures.**
+
+Two dead ends, recorded so they are not retried:
+- **Dropping `step_minimize_bit_width`** (it creates an INT19+INT21 concat) —
+  it also runs `RoundAndClipThresholds`; without it `thresholding_rtl` codegen
+  asserts *"This value is not permitted by chosen dtype"*. Costs 1.48× LUT anyway.
+- **Equalising the concat input datatypes** — pointless. FINN emits separate
+  stream arguments, and the uniform overload takes `hls::stream<TI> (&src)[N]`,
+  an *array*, so the variadic overload binds regardless of type uniformity.
+  (If you ever do need it: `StreamingConcat` reads codegen types from its own
+  `inputDataTypes` **node attribute**, not from the tensors.)
+
+### 10.3 The shipped ONNX is 32% dead logic, and is a stride-8-only COCO detector
+`quantyolov8_4w4a_comact_tidy.onnx` wires only the stride-8 head to `global_out`;
+the P4/P5 head tails dangle. **86 of 269 nodes are unreachable** — 22 of 63 MVAUs,
+18 of 57 Thresholding, 14 CIG, 14 FMPadding. Their `final_hw_config_90fps.json`
+lists all 63 MVAUs, so **the paper's 140,751 LUT / 603 DSP include dead logic.**
+The FPN itself is intact (2 Upsample, 3 SPPF Pool survive) — only the extra
+prediction heads are orphaned. Output is `[1,144,24,40]` = 64 DFL + **80 COCO
+classes**: it does not detect drones.
+
+Pruning by reachability is behaviour-preserving (verified: live subgraph of the
+original vs pruned graph identical in op type *and* weight bytes across all 183
+nodes) and roughly halves the design:
+
+| | unpruned | pruned | ZCU102 % |
+|---|---|---|---|
+| LUT | 126,200 | **58,609** | 21.4% |
+| BRAM_18K | 1,090 | **507** | 27.8% |
+| DSP | 426 | **315** | 12.5% |
+| FPS | 90.42 | 90.42 | — |
+
+Do it: BRAM is the binding constraint (60% *before* FIFOs are sized), and cell
+count drives the quadratic BD stitch — 567 cells pruned vs 902 unpruned.
+
+**FINN's `estimate_layer_resources` excludes FIFOs.** Both times I quoted a BRAM
+figure from it, it was wrong.
+
+### 10.4 Environment gotchas for their fork
+- `FINN_DOCKER_GPU=0` — their older `run-docker.sh` enables `--gpus all` whenever
+  `docker info | grep nvidia` matches; the nvidia runtime is unusable here and
+  FINN needs no GPU. Without it: *"could not select device driver"*.
+- It has **no `exec` subcommand**, and its bare-args path re-expands `"$@"`
+  unquoted, so `run-docker.sh bash -c "cd X && cmd"` is shredded. Put commands in
+  a script file and run `run-docker.sh bash /path/script.sh`.
+- `-t --tty` is hardcoded, so any backgrounded run dies with *"the input device is
+  not a TTY"*. Wrap in `script -qec "..." /dev/null`.
+- Separate `FINN_HOST_BUILD_DIR=/home/alex/finn_build_mdanilow` and its own image
+  tag, so the finn-dev setup is untouched.
+- Their fork uses **PyVerilator** for rtlsim (dev dropped it for `finn_xsi`): it
+  compiles the design to a native multi-threaded binary, so `step_set_fifo_depths`
+  shows a long `g++` link then a `Vfinn_design_wrapper` process at ~400% CPU with
+  **no log output for a long time**. That is normal, not a hang.
+
+### 10.5 Where the build stopped, 2026-08-11
+`/home/alex/finn_build_mdanilow/yolov8/`, scripts `build_zcu102_bit5.py` +
+`run_bit5.sh`, log `bit5.log`, output `yolov8_zcu102_bit5/`. Deviations from the
+authors' script: `BOARD="ZCU102"`, model path, output dir, `step_yolov8_prune_dead`
+inserted after `convert_to_hw_layers`, and `step_measure_rtlsim_performance` /
+`step_out_of_context_synthesis` dropped.
+
+Reached **`step_set_fifo_depths [13/17]`, 0 failures**: ipgen complete (43/43 HLS
+IP), stitch complete (567/567 cells), Verilator FIFO sim running ~40 min when
+stopped by request. Remaining: finish rtlsim → second stitch → `synthesize_bitfile`.
+Verify the `concat.hpp` patch before any run —
+`grep -c "pragma HLS inline" ~/Repos/finn-mdanilow/deps/finn-hlslib/concat.hpp`
+must be **3**.
+
+**RESUME, don't restart.** Their fork *does* support `start_step`
+(`build_dataflow.py:81-112` overrides the input model from the saved
+intermediate) — an earlier note here claimed otherwise and cost 35 min of
+redundant re-run. Use `build_zcu102_resume.py` + `run_resume.sh`, setting
+`RESUME_FROM` to the first step not yet completed:
+- `"step_set_fifo_depths"` after ipgen — needs `intermediate_models/step_hw_ipgen.onnx`
+- `"step_create_stitched_ip"` after FIFO sizing — skips the rtlsim *and* its stitch
+- `"step_synthesize_bitfile"` after stitching
+
+It must write to the **same** `output_dir`, and the `code_gen_ipgen_*` dirs (1682
+of them) must survive — the model references generated IP by path. Resume is
+**step-granular only**: a crash mid-stitch loses that whole stitch, and the
+`ZynqBuild` re-stitch inside `step_synthesize_bitfile` happens regardless.
+
+**Stitch cost, measured — the dominant term and consistently under-estimated.**
+567 cells took **~11 h** (148 cells in the first 30 min, the remaining 419 over
+10.6 h): strongly quadratic in cell index, per §6. The flow stitches up to
+**three** times — `step_set_fifo_depths` (rtlsim characterisation),
+`step_create_stitched_ip` (final depths), and `ZynqBuild` per partition. Budget
+**20–30 h** for a full bitfile at this size, which is why the finn-dev attempt
+ran 36 h. Cutting cell count is the only real lever.
+
+### 10.6 `BD 5-336` — root-caused and fixed, 2026-08-12
+Not a finn-dev drift bug (it reproduced on the authors' fork). **FINN registers
+one `ip_repo_paths` entry per generated IP** — 700 separate repository
+directories, each set in-memory by `ip_config.tcl` immediately before its
+`create_bd_cell`. Vivado's IP catalog does not survive that: by the time the
+partition wrapper is instantiated, its own definition has been evicted, so
+`create_bd_cell` "succeeds" but yields a **locked** cell, and `validate_bd_design`
+then fails with `BD 5-336` / `BD 5-390`.
+
+**Fix — one consolidated repository.** Symlink every IP directory into a single
+folder and register that folder *once*, before the first `create_bd_cell`:
+
+```
+mkdir -p /home/alex/finn_build_mdanilow/ip_repo_all      # 701 symlinks
+# 700 from the absolute paths in ip_config.tcl, PLUS:
+ln -s ~/Repos/finn-mdanilow/finn-rtllib/memstream /home/alex/finn_build_mdanilow/ip_repo_all/memstream
+```
+
+**`memstream` is the one that matters and the easy one to miss** — it is written
+as `$::env(FINN_ROOT)/finn-rtllib/memstream`, not an absolute path, so any filter
+keying on a leading `/` drops it. Without it, instantiation succeeds but child-IP
+generation fails on `MVAU_rtl_*_wstrm` (the weight-stream source). That single
+symlink was the last blocker.
+
+Harness: `/home/alex/finn_build_mdanilow/zynq_retry/` (`ip_config_v4.tcl` is the
+working one, `run.sh` + `inner.sh` drive it). **Iterate here, not through FINN** —
+the zynq shell assembly is minutes while the 24 h of stitches persist on disk, so
+five diagnostic attempts fit in under an hour.
+
+### 10.7 GROUND TRUTH #2: a DSP-based design estimates ×1.44, not ×2.73
+First real bitstream in this project, `zynq_retry/finn_zynq_link.runs/impl_1/top_wrapper.bit`
+(26.5 MB, 2026-08-12), pruned reference YOLOv8n W4A4 @ 90 FPS target, XCZU9EG.
+
+| resource | **real (post-route)** | % ZCU102 | FINN estimate | ratio |
+|---|---|---|---|---|
+| CLB LUT | **84,364** | 30.8% | 58,609 | **×1.44** |
+| — as logic | 54,830 | 20.0% | | |
+| — as memory | 29,534 | 20.5% | | |
+| CLB Registers | 63,132 | 11.5% | — | |
+| **CARRY8** | 1,583 | **4.6%** | not modelled | |
+| **Block RAM Tile** | **725.5** | **79.6%** | 253.5 (=507 BRAM_18K) | **×2.86** |
+| DSP48E2 | 359 | 14.3% | 315 | ×1.14 |
+| CLB | 16,867 | 49.2% | | |
+
+Timing closed with room: **WNS +3.282 ns** at a 10.0 ns period, TNS 0.000, **0 of
+392,283 endpoints failing**; hold met (WHS +0.009). Critical path ≈ 6.72 ns, i.e.
+**~149 MHz achievable** → ~134 FPS rather than the 90.42 quoted at 100 MHz.
+
+Three corrections to §9 that follow from this:
+1. **The ×2.73 LUT multiplier is specific to LUT-based arithmetic.** With MACs in
+   DSPs (`MVAU_rtl`, W4A4) it drops to **×1.44**. The "keep estimated LUT under
+   ~70,000" rule was derived from ×2.73 and is far too conservative for this class.
+2. **CARRY8 stops being the wall.** 4.6% here vs **104%** on n_eighth W8A8 — that
+   was what made placement refuse. Same cause: adder trees in fabric.
+3. **BRAM is now the binding constraint, and the estimate is ×2.86 low** because
+   `estimate_layer_resources` excludes FIFOs. 79.6% used means the *unpruned*
+   design (×2.15 the BRAM estimate) would not have fitted. Pruning was a
+   precondition for building, not an optimisation.
+
+**Power, post-route: 5.230 W total — of which PS8 is 2.736 W.** The whole fabric
+(CLB 0.382 + signals 0.344 + BRAM 0.609 + DSP 0.196 + clocks 0.224) is **1.755 W**.
+That is the Z7020 power shape again on a much bigger part, and it confirms the
+locked "Power shape" decision: **PS involvement, not fabric size, dominates.**
+
+### 10.8 The compiled topology, recovered exactly — 2026-08-12
+To retrain the reference for drones we need the architecture the bitstream was
+actually built from, not stock yolov8n. Recovered by reachability analysis on
+`quantyolov8_4w4a_comact_tidy.onnx` and reproduced as
+**`configs/yolov8n_p3_relu.yaml`**.
+
+**It is stock yolov8n layers 0–15 plus a single stride-8 head.** §10.3 said "the
+FPN is intact, only the extra prediction heads are orphaned" — that was
+imprecise. The whole **bottom-up PAN path is dead too** (stock layers 16–21:
+Conv/Concat/C2f ×2), because 18 and 21 feed nothing but the P4/P5 head branches.
+What runs is backbone + top-down FPN + `Detect([15])`.
+
+- 41 live Conv of 63. Verified by `scripts/check_v8_topology.py`: **identical
+  multiset of 41 conv weight shapes** at nc=80. Compare on the multiset, not the
+  sequence — `named_modules()` walks C2f in declaration order while ONNX is
+  topological, and the exporter interleaves Detect's independent cv2/cv3 branches.
+- The head must be **legacy** (`Conv 3×3 → Conv 3×3 → Conv2d 1×1`). Ultralytics
+  8.3.253 defaults `Detect.cv3` to a DWConv head; `parse_model` sets
+  `legacy=True` for v8 yamls, so a v8 yaml is right and a v11 one would not be.
+- At **nc=1 the head narrows**: `c3 = max(ch[0], min(nc, 100))` is 64 for one
+  class vs 80 for COCO, so the three cv3 convs shrink and the output goes
+  `[1,144,H,W]` → `[1,65,H,W]`. Everything else is shape-identical. This is the
+  only unavoidable deviation from "one-to-one".
+- Output is the **raw** `[1, 4·reg_max + nc, 24, 40]` head tensor. DFL, decode
+  and NMS run off-chip (`simple_yolov8_driver.py`) — do not export them.
+
+**Precision map, read off the graph — it is NOT uniformly 4-bit.**
+
+| | weights | activation |
+|---|---|---|
+| stem conv (`model.0`) | INT8 | UINT8 |
+| the six `Detect` convs | INT8 | UINT8 |
+| the other 34 convs | INT4 | UINT4 |
+
+All activations are **unsigned** (UINT4/UINT8), which is what pins ReLU. Input is
+UINT8 raw pixels. This is the recipe QAT has to reproduce; the authors' Brevitas
+source (`models.finn_models.QuantC2f`, `QuantV8Detect`) is **not** in their public
+fork — only the exported ONNX — so it has to be rebuilt from this table.
+
+**Footprint: 1,610,337 params at nc=1** (vs 3,011,043 for full 3-head yolov8n),
+1,603,568 conv weights = 152,048 at W8 + 1,451,520 at W4 = **7.02 Mbit
+theoretical → 14.04 Mbit at FINN ×2**. That is the **7–23 Mbit band**, i.e. a
+K26-class part — so the built network *does* port off the devkit. An earlier note
+calling YOLOv8n devkit-only was costing the full 3.2M-param net, not this one.
+
+### 10.9 "comact" = ONE common activation range, and it must be trained in
+Measured on the reference graph 2026-08-12. Every live `Mul`-by-constant in it is
+either a per-channel weight scale (41, one per conv) or a **per-tensor activation
+scale — and there are only two distinct values in the whole network**:
+
+| activations | scale | = | range |
+|---|---|---|---|
+| 34 × UINT4 | 0.40000004 | 6/15 | **[0, 6]** |
+| 5 × UINT8 | 0.02352941 | 6/255 | **[0, 6]** |
+
+Same range everywhere, differing only by bit width. That is what `comact` in
+`quantyolov8_4w4a_comact` means: **common activation**. Note also that weights are
+**per-channel** quantized, not per-tensor as in our yolov5 pipeline.
+
+**This removes the hardest part of the yolov5 recipe.** With one common activation
+range every join is at the same scale by construction, so none of
+`qat/quantize.py`'s `SharedQuant` machinery — the thing §4 and CLAUDE.md call the
+FINN precondition — is needed. There is nothing to tie.
+
+**But the network has to be trained into [0, 6], and ours was not.** Measured on
+`runs/train/v8n_p3_relu` over 256 close-regime images: **all 39 Conv blocks exceed
+6**, median site max **21.7**, worst 210 (`model.1`), and **10–13% of values in the
+early layers sit above 6**. Clamping that to a fixed [0, 6] at QAT time throws most
+of the early signal away.
+
+Fix: train the float model with **`nn.ReLU6()`** —
+`configs/yolov8n_p3_relu6.yaml`, verified 41/41 against the compiled graph. Do not
+try to reach the reference's activation quantization from a plain-ReLU checkpoint;
+it is the same class of mistake as pasting ReLU into SiLU-trained weights (§1).
+
+**The clamp is free — measured 2026-08-13.** `runs/train/v8n_p3_relu62` (ReLU6)
+vs `runs/train/v8n_p3_relu` (plain ReLU), identical recipe otherwise: close mAP50
+0.9855 vs 0.9878, mid 0.9893 vs 0.9929, **long 0.8691 vs 0.8643**, close centre
+error 0.0139 vs 0.0141 at -0.9% n_TP. A few tenths of a point on close/mid, half a
+point *gained* on long, aim error unchanged. Train into the range; do not clamp
+afterwards.
+
+**One trap the fix for §10.5's output path created.** Ultralytics reuses
+`args.project` as the **W&B project name**
+(`wb.init(project=str(trainer.args.project).replace("/", "-"))`), so making
+`project` absolute — required for the output dir to land correctly — sends the run
+to a project called `-home-alex-Repos-drone-detect-runs-train`. Its callback is
+guarded by `if not wb.run:`, so the fix is to call `wandb.init()` yourself before
+`model.train()` and let Ultralytics adopt the run.
+
+### 10.10 W4A4 QAT on the drone net — PASSES, 2026-08-13
+`qat/quantize_v8.py` + `qat/train_qat_v8.py`, 30 epochs at lr0 0.002 from the
+ReLU6 float run, ~50 min. Best at epoch 28, `runs/qat/v8n_p3_w4a4`.
+
+| | close mAP50 | close mAP50-95 | mid mAP50 | long mAP50 | long mAP50-95 | close centre err |
+|---|---|---|---|---|---|---|
+| float ReLU6 | 0.9855 | 0.7128 | 0.9893 | 0.8691 | 0.4848 | 0.0139 |
+| W4A4 PTQ | 0.9880 | 0.6737 | — | 0.7663 | 0.3540 | — |
+| **W4A4 QAT** | 0.9835 | 0.7099 | 0.9879 | 0.8514 | 0.4733 | **0.0139** |
+
+PTQ alone loses 3.9 pt of close mAP50-95 and 10.3 pt of long-range mAP50; QAT
+gives back 96% and 86% of that. **Aim error is unchanged** — 14.03 px vs 14.10 at
+0.4% fewer matched TPs. Note close mAP50 *rises* under PTQ (0.9880) and falls
+slightly after QAT (0.9835): at IoU 0.5 the metric is blind to what quantization
+actually damages. Judge on mAP50-95 and centre error.
+
+Three Brevitas/Ultralytics traps, all now handled in `qat/train_qat_v8.py`:
+- **`load_state_dict` strands 120 const-scale buffers on CPU.** Build and load on
+  CPU, then `.to(device)` — the same rule already recorded for yolov5. Verified
+  bit-exact.
+- **`final_eval` reloads `best.pt` through `load_checkpoint`** and raises
+  `KeyError: 'model'` on a state_dict checkpoint. Override it to validate the
+  in-memory EMA.
+- **Ultralytics' W&B callback keys off global SETTINGS**, not the trainer, so a
+  `--no-wandb` flag must strip the callbacks rather than skip its own init.
+
+### 10.11 QONNX export of the drone net — matches the reference graph, 2026-08-13
+`export/export_qonnx_v8.py` → `export/v8n_p3_w4a4_192x320_clean.onnx`, 227 live
+nodes, input `(1,3,192,320)`, output `(1,65,24,40)` raw. **Zero unsupported ops.**
+
+| op | ours | reference |
+|---|---|---|
+| Conv | 41 | 41 |
+| BatchNormalization | 39 | 39 |
+| Concat | 10 | 10 |
+| Split | 6 | 6 |
+| MaxPool | 3 | 3 |
+| Resize | 2 | 2 |
+| Add | 6 | 8 |
+| Relu / MultiThreshold | 39 | 39 |
+| Quant | 81 | 0 (streamlined) |
+
+Quant histogram is the reference precision map exactly: **34 signed-4 (weights) +
+34 unsigned-4 (acts) + 7 signed-8 (weights) + 6 unsigned-8 (5 acts + the input)**.
+The two remaining differences are streamlining artefacts, not discrepancies: the
+reference's extra 2 Adds are the head bias terms that streamlining splits out of
+the Conv nodes, and its 80 Muls / 1 Div are the dequant scales our graph still
+carries as Quant nodes.
+
+**Two export-only patches, both required:**
+- `RawV8Head` — Detect reduced to cv2/cv3 plus the box|cls concat. DFL, decode
+  and NMS stay off-chip.
+- **`C2f.forward` must become `forward_split`.** `Tensor.chunk` unrolls into
+  Shape → Gather → Div/Mul → Slice (verified on opset 11 and 13), leaving 12
+  Slice nodes with no FINN hardware op; `torch.split` traces to one `Split`,
+  which is what the reference carries. Numerically identical — a tracing concern
+  only, so patch at export, not in training. Ultralytics ships `forward_split`.
+
+Then `qonnx.util.cleanup`: 269 → 227 nodes, and it constant-folds the 12 Adds
+down to **exactly the 6 Bottleneck residuals**.
+
+### 10.12 Build resolution: 192×320, decided 2026-08-13
+Measured with `scripts/center_error.py --imgsz 192,320` (only `predict` honours a
+rectangle — `val()` silently rounds `[h, w]` to an int):
+
+| input | close n_TP | close err | long n_TP | long err |
+|---|---|---|---|---|
+| 320×320 | 1645 | 0.0139 | **1664** | 0.0020 |
+| 192×320 | 1644 | **0.0131** | **896** | 0.0027 |
+
+**Close is untouched** — 1 detection difference and a slightly better centre
+error. **Long loses 46% of its detections.** That is the vertical squeeze pushing
+small targets under the detection floor, and it is an artefact of letterboxing
+*our val images* into 5:3 — in deployment the input is a centre **crop**, which
+keeps angular resolution and only narrows the field. So it overstates the cost.
+
+Decision: build at **192×320**. It is the geometry already proven to fit (79.6%
+BRAM), it costs nothing in the close/mid regime we actually target, and 320×320
+is 1.67× the pixels against a BRAM budget that is already the binding constraint.
+Revisit once there is real footage through the chosen lens.
+
+### 10.13 Reclaiming disk from a FINN build dir
+A `FINN_HOST_BUILD_DIR` is ~95% regenerable scratch. Measured on
+`~/finn_build_dev` (20 GB, 2026-08-14):
+
+| | size | keep? |
+|---|---|---|
+| `code_gen_*` | 13 GB / 1515 dirs | no — HLS/RTL codegen scratch |
+| `rtlsim_*` | 2.6 GB / 269 dirs | no |
+| `vivado_*` | 3.2 GB / 18 dirs | no — stitch projects |
+| named outputs (`n_eighth_*`, `pico_*`, `yolov8_ref*`) | **933 MB** | **YES** |
+
+`rm -rf code_gen_* rtlsim_* vivado_*` frees 19 GB and leaves every `report/`
+that build_notes cites. **Do not delete the named output dirs** — they carry the
+`estimate_layer_resources.json` behind the §9 and §C5 numbers. The cost is that
+those builds stop being resumable (their saved `.onnx` reference generated IP by
+absolute path), which is fine for finished or abandoned ones.
+
+### 10.14 A single failed HLS IP passes silently and kills the stitch hours later
+Hit 2026-08-14 on the drone build. `step_set_fifo_depths` died with
+
+    ERROR: [BD 5-390] IP definition not found for VLNV: xilinx.com:hls:DuplicateStreams_hls_12:1.0
+    Exception: CreateStitchedIP failed, no wrapper HDL found
+
+**This is NOT the §10.6 catalog-eviction bug.** `CreateStitchedIP` already
+registers every repo in one `set_property ip_repo_paths [list ...]`. The real
+cause was one layer whose IP had never been packaged: its `vitis_hls.log` held
+
+    ERROR: [Common 17-685] Unable to load Tcl app xilinx::questa
+    ERROR: [IMPL 213-28] Failed to generate IP.
+
+**Exactly 1 of 41 HLS layers**, transient — it did not recur on re-run, so it is
+most likely a race between the 10 parallel Vitis HLS processes, not a
+configuration fault. **FINN does not check.** `HLSSynthIP` then logged
+*"Using pre-existing IP"* for it (82 such lines in that run) and the flow carried
+on for hours before the stitch tripped over the missing VLNV.
+
+**Detect it right after ipgen** — one incomplete dir is enough to waste a day:
+```
+for d in $FINN_HOST_BUILD_DIR/code_gen_ipgen_*_hls_*; do
+  find "$d" -name component.xml -print -quit | grep -q . || echo "NOT PACKAGED: $d"
+done
+```
+Only test `*_hls_*`: **RTL layers never produce a `component.xml`**, so a naive
+sweep reports hundreds of false positives (437 of them here, nearly all
+`Thresholding_rtl_*`).
+
+**Recovery, without rebuilding:** delete the failed dir and resume from
+**`step_hw_codegen`**, not `step_hw_ipgen`. The saved `step_hw_codegen.onnx`
+records the old dir in each node's `code_gen_dir` attribute, and `HLSSynthIP`
+only synthesises — it is `PrepareIP`, in the codegen step, that creates the
+directory. Resuming at ipgen just dies with
+`FileNotFoundError: .../ipgen.sh`.

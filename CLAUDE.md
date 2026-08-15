@@ -17,22 +17,40 @@ Full source docs live in [.claude/docs/](.claude/docs/):
 `FINN → bitstream` → `PYNQ deployment`. Everything up to and including QONNX
 export is **board-agnostic** and done on the host GPU.
 
-**Where we are:** the whole chain compiles. n_eighth (20 joins) goes end-to-end
-through FINN dev to estimates — 245 layers, all converted, contiguous dataflow
-block. **Bitstream is the open work**, and it is the first step that checks the
-estimates against reality. Key facts, all detailed in
-[build_notes.md](.claude/docs/build_notes.md):
+**Where we are: a bitstream exists.** 2026-08-12, the pruned reference YOLOv8n
+W4A4 built all the way to `top_wrapper.bit` on ZCU102 — timing closed with
++3.28 ns slack (~149 MHz, ~134 FPS), 30.8% LUT, **79.6% BRAM**, 14.3% DSP. That
+is the first ground truth on a *DSP-based* design and it changes the budgets
+below. Our own n_eighth (20 joins, 245 layers) still goes only to estimates.
+Key facts, all detailed in [build_notes.md](.claude/docs/build_notes.md):
 
 - **FINN compiles branched YOLO** — the old "no joins" blocker was wrong
   (refuted 2026-08-04). Joins need their branches to share one quantisation
   scale, which is **set during QAT** and is already done (20/20 tied, free).
 - **Use FINN dev, not v0.10.1**, for anything with joins.
 - **Folding is the whole game.** `--target-fps 30` under-folds ~11× and produces
-  unbuildable FIFOs; `export/balance_folding.py` is the fix. Preferred n_eighth
-  config: **189 FPS @100 MHz, 129k LUT est** (`mvau_wwidth_max=144`).
-- **Never use the default FIFO sizing strategy** on a joined net — both
-  automatic strategies are dead ends; use `--fifo-strategy none`.
-- Budget LUT at **×1.56 the estimate**. 75% estimated is not a safe ceiling.
+  unbuildable FIFOs; `export/balance_folding.py` is the fix. But see the LUT
+  calibration below — the old "preferred 189 FPS" config **does not fit**; run
+  `balance_folding.py --headroom 0.27` to search against reality.
+- **FIFO sizing: the dead end was the imbalance, not the strategy.** Balance
+  folding first and the default `largefifo_rtlsim` works — verified on pico
+  2026-08-06: deepest FIFO **289,032 → 1,627**, nothing near Vivado's 32,768
+  limit. `characterize` *is* a real dead end on joined nets (it refuses
+  two-stream adds). `--fifo-strategy none` remains useful only to halve the
+  stitch time, which is unchanged and quadratic.
+- **The LUT multiplier depends on where the MACs live — two measurements now.**
+  LUT-based arithmetic (pico W8A8, 2026-08-06): FINN said 118,916 LUT, Vivado
+  said **324,702** = **×2.73**, 118% of the device, place-and-route refused it,
+  and **CARRY8 hit 104%** — the adder trees, not the LUTs, were the real wall.
+  DSP-based (`MVAU_rtl`, W4A4, 2026-08-12): **×1.44**, and CARRY8 falls to 4.6%.
+  So `standalone_thresholds` + W4 to unlock DSP packing is not a micro-opt, it
+  moves the design into a different cost class. See build_notes §9 and §10.7.
+- **BRAM is the binding constraint, and FINN under-estimates it ×2.86** because
+  `estimate_layer_resources` **excludes FIFOs**. The real build sits at 79.6% of
+  the ZCU102's 912 tiles. Budget BRAM at ×2.9 the estimate; it, not LUT, is the
+  go/no-go for a smaller deployment part.
+- **Consequence: n_eighth's 24–32 FPS ceiling was a LUT-arithmetic result**, and
+  should be re-derived at W4A4 with DSP packing before it is treated as final.
 
 > **Target framing is a lens × crop question — and "mid" is good enough.**
 > A 30 cm drone at 10 m subtends only **1.72°**. *Resizing* a Full-HD frame to
@@ -59,9 +77,13 @@ estimates against reality. Key facts, all detailed in
 5b. FINN build (estimates) — **DONE 2026-08-05**. pico on v0.10.1 (19,472 LUT /
    193 BRAM), n_eighth on FINN dev (77,927 LUT / 348 BRAM / 3 DSP at the
    `--target-fps 30` floor; 129,462 LUT at the preferred 189 FPS point).
-5c. FINN build (bitstream) — **OPEN.** Three failed attempts so far, all in FIFO
-   sizing or stitching; the path forward is balanced folding + `--fifo-strategy
-   none`. See build_notes §5.
+5c. FINN build (bitstream) — **PATH PROVEN 2026-08-12** on the reference
+   YOLOv8n W4A4: `top_wrapper.bit`, timing closed, real numbers in build_notes
+   §10.7. The recipe is the authors' fork + dev's `concat.hpp` + dead-logic
+   pruning + one consolidated IP repository (§10.2/§10.3/§10.6). **Not yet done
+   for our own drone net** — that is phase 7.
+7. Retarget to drones — **NEXT, and the only thing between us and a working
+   detector on hardware.** Two routes, see the open question below.
 6. `configs/yolov5_pico.yaml` — branch-free, single-scale, 357k-param net. Float
    close mAP50 **0.975** vs yolov5n's 0.989; long range 0.778 vs 0.904. Not yet
    quantized. Sized for a Z7020 budget, so ~10% of a ZCU102. **Its rationale is
