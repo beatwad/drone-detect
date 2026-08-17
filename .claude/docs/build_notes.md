@@ -1331,3 +1331,40 @@ Third confirmation of the locked "Power shape" decision: the PS dominates.
 
 **BRAM remains the go/no-go for a smaller part.** 691 tiles = 24.9 Mbit on-chip;
 this design does not fit a ZU3EG and needs a K26-class part at minimum.
+
+### 10.17 Generating the PYNQ driver when `step_synthesize_bitfile` never returned
+`MakePYNQDriver` does not need the bitfile, but it does need **the model
+ZynqBuild produces** — a parent holding three `StreamingDataflowPartition`
+nodes (input IODMA → dataflow → output IODMA). Running it on the post-stitch
+checkpoint fails:
+
+    AssertionError: Ensure CreateDataflowPartition called before driver creation.
+
+because there the graph input feeds a `Transpose`, not a partition
+(`dataflow_parent.onnx` is `Transpose → SDP → Transpose → Mul → Add`, §10.13).
+FINN raised inside ZynqBuild *after* partitioning, so that parent was never
+saved — but the three children survive in
+`intermediate_models/kernel_partitions/`:
+
+| file | contents | tensor |
+|---|---|---|
+| `partition_0.onnx` | 1 × `IODMA_hls` | `global_in` (1,192,320,3) |
+| `partition_2.onnx` | 685 nodes, the accelerator | |
+| `partition_1.onnx` | 1 × `IODMA_hls` | `global_out` (1,24,40,65) |
+
+Note the numbering: file `partition_1` is the **output** DMA. Rebuild the parent
+by chaining the three on the tensor names they already share and re-run the
+transform — `yolov8/make_drone_driver.py`. Nothing is invented: every shape,
+datatype and folding decision comes out of the children. Set `instance_name` to
+the names in the harness' `ip_config.tcl` (`idma0`, `odma0`) so the driver's DMA
+handles match the built bitstream.
+
+**The driver confirms the accelerator's I/O contract** (matches what
+`deploy/postprocess.py` assumed): in **UINT8 (1,192,320,3) NHWC**, out **INT21
+(1,24,40,65)**, packed output (1,24,40,65,3) — 3 bytes per INT21.
+
+Deployment package = driver files + `top_wrapper.bit` as **`resizer.bit`** +
+`hw_handoff/top.hwh` as **`resizer.hwh`** (PYNQ's `Overlay` derives the .hwh
+name from the .bit) + `postprocess.py` + the dequant npz. 26 MB total.
+`runtime_weights/` is correctly **empty**: all 80 layers have
+`runtime_writeable_weights: 0`, so the weights are inside the bitstream.
