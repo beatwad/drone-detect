@@ -1261,3 +1261,73 @@ records the old dir in each node's `code_gen_dir` attribute, and `HLSSynthIP`
 only synthesises — it is `PrepareIP`, in the codegen step, that creates the
 directory. Resuming at ipgen just dies with
 `FileNotFoundError: .../ipgen.sh`.
+
+### 10.15 `BD 5-336` recurs on every build — patch it BEFORE launching, 2026-08-15
+§10.6 root-caused it and built a working harness, but **nothing in FINN was
+fixed**, so `step_synthesize_bitfile` walks into the same wall on every new
+design. On the drone build it did so after **23 h 32 min** of codegen, FIFO
+sizing and stitching, two minutes into `MakeZYNQProject`:
+
+    ERROR: [BD 5-336] ... locked IPs: top_StreamingDataflowPartition_1_0
+    Exception: Synthesis failed, no bitfile found
+
+The failure costs almost no compute — everything before it is on disk and gets
+reused — but it costs however long it takes someone to notice. **Treat the
+harness as part of the recipe, not as a recovery step.**
+
+Recipe, ~5 minutes, from the `ip_config.tcl` FINN already wrote into
+`vivado_zynq_proj_*`:
+1. Extract every `/home/.../` path out of the `set_property ip_repo_paths` lines
+   (690 for this design) and symlink each into **one** fresh folder.
+2. Add the `memstream` symlink (§10.6 — it is written via `$::env(FINN_ROOT)`,
+   so any absolute-path filter silently drops it).
+3. Replace all `set_property ip_repo_paths` lines with a single
+   `set_property ip_repo_paths [list <folder>] [current_project]` before the
+   first `create_bd_cell`, and keep exactly one `update_ip_catalog`.
+4. Run it under `run-docker.sh bash <inner.sh>`; needs a pty, so wrap in
+   `script -qec`.
+
+**Use a separate folder per design.** `ip_repo_all` (reference) and
+`ip_repo_drone` (ours) must not be merged: both define
+`xilinx_finn:finn:StreamingDataflowPartition_1:1.0`, `MVAU_rtl_0` and so on.
+Harness: `/home/alex/finn_build_mdanilow/zynq_drone/`.
+
+FINN stays parked at its pdb prompt after the exception, so **steps 6/7 and 7/7
+(`step_make_pynq_driver`, `step_deployment_package`) never run**. Generate the
+driver separately from `intermediate_models/step_create_stitched_ip.onnx` — it
+reads data layouts from the model and does not need the bitfile.
+
+### 10.16 GROUND TRUTH #3: our own detector, on hardware — 2026-08-15
+`zynq_drone/finn_zynq_link.runs/impl_1/top_wrapper.bit` (26.5 MB), yolov8n-P3
+ReLU6 W4A4 @ 192×320, XCZU9EG, 100 MHz. Whole design incl. the PS shell.
+
+| resource | **real (post-route)** | % ZCU102 | predicted | error | reference §10.7 |
+|---|---|---|---|---|---|
+| CLB LUT | **82,222** | 30.0% | ~82,900 | **0.8%** | 84,364 |
+| — as logic | 53,291 | 19.4% | | | 54,830 |
+| — as memory | 28,931 | 20.1% | | | 29,534 |
+| CLB Registers | 60,820 | 11.1% | | | 63,132 |
+| CARRY8 | 1,534 | 4.5% | | | 1,583 |
+| **Block RAM Tile** | **691** | **75.8%** | ~714 | **3.2%** | 725.5 |
+| DSP48E2 | 334 | 13.3% | ~342 | **2.3%** | 359 |
+| CLB | 16,471 | 48.1% | | | 16,867 |
+
+**The §10.7 calibration transferred to a different network with no adjustment**
+(LUT ×1.44, BRAM ×2.86, DSP ×1.14 over FINN's estimate of 57,600 LUT / 499
+BRAM_18K / 300 DSP). One measurement was a data point; two make it a rule —
+budget new designs with these multipliers and expect a few percent.
+
+Timing: **WNS +1.765 ns** at 10.0 ns, TNS 0.000, **0 of 379,557 endpoints
+failing**, hold met (WHS +0.006, tight but positive). Critical path 8.235 ns →
+**~121 MHz achievable**, vs the reference's 6.72 ns / ~149 MHz. **We are smaller
+than the reference on every resource yet have half its slack**, so the long path
+is ours, not the flow's — look at the P3 head or a wide MVAU if clock ever
+matters. It does not yet: 90.4 FPS at the built 100 MHz (≈110 if clocked up)
+against a 50–100 ms end-to-end budget.
+
+Power, post-route: **5.104 W total, PS8 2.736 W**, static 0.738 W, whole fabric
+1.630 W (CLB 0.359 + signals 0.315 + BRAM 0.572 + DSP 0.168 + clocks 0.216).
+Third confirmation of the locked "Power shape" decision: the PS dominates.
+
+**BRAM remains the go/no-go for a smaller part.** 691 tiles = 24.9 Mbit on-chip;
+this design does not fit a ZU3EG and needs a K26-class part at minimum.

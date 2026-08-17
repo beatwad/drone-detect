@@ -17,11 +17,13 @@ Full source docs live in [.claude/docs/](.claude/docs/):
 `FINN → bitstream` → `PYNQ deployment`. Everything up to and including QONNX
 export is **board-agnostic** and done on the host GPU.
 
-**Where we are: a bitstream exists.** 2026-08-12, the pruned reference YOLOv8n
-W4A4 built all the way to `top_wrapper.bit` on ZCU102 — timing closed with
-+3.28 ns slack (~149 MHz, ~134 FPS), 30.8% LUT, **79.6% BRAM**, 14.3% DSP. That
-is the first ground truth on a *DSP-based* design and it changes the budgets
-below. Our own n_eighth (20 joins, 245 layers) still goes only to estimates.
+**Where we are: OUR OWN drone detector is a bitstream.** 2026-08-15, yolov8n-P3
+ReLU6 W4A4 @ 192×320 built to `top_wrapper.bit` on ZCU102 — timing closed with
++1.77 ns slack at 100 MHz (~121 MHz achievable), **30.0% LUT, 75.8% BRAM, 13.3%
+DSP**, 5.10 W of which PS8 is 2.74 W. The reference build that proved the path
+(2026-08-12) is at 30.8% / 79.6% / 14.3%, +3.28 ns. **Prediction error was
+0.8% on LUT, 3.2% on BRAM, 2.3% on DSP** — the §10.7 multipliers transferred to
+a new network unchanged, so they are now a budgeting rule, not a data point.
 Key facts, all detailed in [build_notes.md](.claude/docs/build_notes.md):
 
 - **FINN compiles branched YOLO** — the old "no joins" blocker was wrong
@@ -77,13 +79,17 @@ Key facts, all detailed in [build_notes.md](.claude/docs/build_notes.md):
 5b. FINN build (estimates) — **DONE 2026-08-05**. pico on v0.10.1 (19,472 LUT /
    193 BRAM), n_eighth on FINN dev (77,927 LUT / 348 BRAM / 3 DSP at the
    `--target-fps 30` floor; 129,462 LUT at the preferred 189 FPS point).
-5c. FINN build (bitstream) — **PATH PROVEN 2026-08-12** on the reference
-   YOLOv8n W4A4: `top_wrapper.bit`, timing closed, real numbers in build_notes
-   §10.7. The recipe is the authors' fork + dev's `concat.hpp` + dead-logic
-   pruning + one consolidated IP repository (§10.2/§10.3/§10.6). **Not yet done
-   for our own drone net** — that is phase 7.
-7. Retarget to drones — **NEXT, and the only thing between us and a working
-   detector on hardware.** Two routes, see the open question below.
+5c. FINN build (bitstream) — **DONE 2026-08-15 for our own drone net.**
+   `zynq_drone/.../top_wrapper.bit`, timing closed, real numbers in build_notes
+   §10.16; the reference build that proved the path is §10.7. Recipe: the
+   authors' fork + dev's `concat.hpp` + dead-logic pruning + one consolidated IP
+   repository (§10.2/§10.3/§10.6). **`BD 5-336` is unfixed in FINN and will hit
+   every build** — prepare the harness up front, §10.15.
+7. Retarget to drones — **DONE.** yolov8n-P3 ReLU6 retrained on drones (close
+   0.9855 / mid 0.9893 / long 0.8691 float; W4A4 QAT 0.9835 / 0.9879 / 0.8514
+   with centre error unchanged at 0.0139), exported, built. **NEXT is board
+   bring-up:** PYNQ driver (never generated — §10.15), PetaLinux for ZCU102, and
+   `deploy/postprocess.py` for the host-side decode.
 6. `configs/yolov5_pico.yaml` — branch-free, single-scale, 357k-param net. Float
    close mAP50 **0.975** vs yolov5n's 0.989; long range 0.778 vs 0.904. Not yet
    quantized. Sized for a Z7020 budget, so ~10% of a ZCU102. **Its rationale is
