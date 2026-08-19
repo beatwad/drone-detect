@@ -17,7 +17,15 @@ Full source docs live in [.claude/docs/](.claude/docs/):
 `FINN → bitstream` → `PYNQ deployment`. Everything up to and including QONNX
 export is **board-agnostic** and done on the host GPU.
 
-**Where we are: OUR OWN drone detector is a bitstream.** 2026-08-15, yolov8n-P3
+**Where we are: the whole host side is done and verified; we are waiting on
+hardware.** As of 2026-08-19 the detector is a bitstream, the driver exists, the
+numeric path from PyTorch to the built graph is checked end to end, and a ZCU102
+Linux image is built and inspected. The board itself is **not here yet** (on its
+way), so exactly one junction in the chain is untested: real hardware against the
+simulation. `deploy/run_on_board.py` performs that check in one command when it
+arrives.
+
+2026-08-15, yolov8n-P3
 ReLU6 W4A4 @ 192×320 built to `top_wrapper.bit` on ZCU102 — timing closed with
 +1.77 ns slack at 100 MHz (~121 MHz achievable), **30.0% LUT, 75.8% BRAM, 13.3%
 DSP**, 5.10 W of which PS8 is 2.74 W. The reference build that proved the path
@@ -87,9 +95,28 @@ Key facts, all detailed in [build_notes.md](.claude/docs/build_notes.md):
    every build** — prepare the harness up front, §10.15.
 7. Retarget to drones — **DONE.** yolov8n-P3 ReLU6 retrained on drones (close
    0.9855 / mid 0.9893 / long 0.8691 float; W4A4 QAT 0.9835 / 0.9879 / 0.8514
-   with centre error unchanged at 0.0139), exported, built. **NEXT is board
-   bring-up:** PYNQ driver (never generated — §10.15), PetaLinux for ZCU102, and
-   `deploy/postprocess.py` for the host-side decode.
+   with centre error unchanged at 0.0139), exported, built.
+8. Board bring-up, host side — **DONE 2026-08-19**, build_notes §11.
+   - PYNQ driver recovered (FINN never generated it — §10.17) and the deployment
+     package assembled: UINT8 (1,192,320,3) NHWC in, INT21 (1,24,40,65) out.
+   - The whole numeric path verified (§10.18): export vs torch = ±1 activation
+     step, FINN frontend exact, **convert_to_hw bit-exact**, and the
+     MultiThreshold convention costs nothing measurable on aim error.
+   - PetaLinux 2022.2 image built for ZCU102 — `deploy/petalinux/` reproduces it.
+     PetaLinux runs in a container (the host is Ubuntu 26.04, far past what
+     kirkstone tolerates). Three settings are load-bearing and none is default:
+     `MACHINE_NAME=zcu102-rev1.0`, the **GTR mux hogs the DTG's board dtsi omits**
+     (without them SEL=0000 and USB 3.0 does not exist), and
+     `CONFIG_USB_DWC3_DUAL_ROLE` (host-only does not link on Xilinx 5.15).
+   - `deploy/run_on_board.py` compares real INT21 against a 60-frame golden set
+     from the simulation, in LSB units. Tolerance 0.05 LSB — a real error is 1.0,
+     float32 noise at these magnitudes is ~0.008. Positive and negative controls
+     both pass on the host.
+9. **NEXT, blocked on hardware arriving:** `pip install pynq` over the built XRT
+   (no official PYNQ image exists for ZCU102 — the one genuinely unknown step),
+   write the card with `deploy/petalinux/mksd.sh`, boot, then run
+   `run_on_board.py`. After that: real FPS and power under load.
+
 6. `configs/yolov5_pico.yaml` — branch-free, single-scale, 357k-param net. Float
    close mAP50 **0.975** vs yolov5n's 0.989; long range 0.778 vs 0.904. Not yet
    quantized. Sized for a Z7020 budget, so ~10% of a ZCU102. **Its rationale is
@@ -158,6 +185,12 @@ Key facts, all detailed in [build_notes.md](.claude/docs/build_notes.md):
   therefore **NOT available** — that needs MIPI/parallel pixels on PL pins.
   Accepted: est. ~10–25 ms end-to-end on ZCU102 with C preprocessing, well
   inside the 50–100 ms budget.
+  - **Trigger DEFERRED 2026-08-19** — decided to buy a camera without one for
+    now (candidate: ELP AR0234 USB3, 1920×1200 global shutter, 120 fps). At
+    120 fps the inter-frame interval is 8.3 ms, which bounds timestamp error
+    without a trigger; that is tolerable for bring-up. The reasoning below still
+    stands and the requirement returns as soon as aim error is being measured
+    rather than the pipeline being proven.
   - **Hardware trigger is a REQUIREMENT, not a nice-to-have.** Drive the camera
     trigger from PL and you get an exact exposure timestamp t₀; the Kalman then
     predicts forward from t₀, so variable USB/Linux delay becomes a *measured*
@@ -203,11 +236,19 @@ Key facts, all detailed in [build_notes.md](.claude/docs/build_notes.md):
   FINN cloned twice at `~/Repos/finn` (v0.10.1) and `~/Repos/finn-dev` (dev, use
   this one for joined nets). Both have setup gotchas that will waste hours if
   rediscovered — see [build_notes.md](.claude/docs/build_notes.md) §7.
+- **PetaLinux 2022.2** is NOT installed on the host and must not be: Ubuntu 26.04
+  has gcc 15 and python 3.12, and PetaLinux is Yocto kirkstone. It lives at
+  `/home/alex/petalinux/` (11 GB, aarch64 only) and runs in the container built
+  from `deploy/petalinux/Dockerfile`; `plnx.sh` is the entry point. Note that
+  **`petalinux-*` commands exit 0 when they fail** — the real error is in
+  `build/config.log`. See build_notes §11.
 - Repo layout: `scripts/` (merge + cleaning + `center_error.py`), `configs/`,
   `training/`, `qat/` (`quantize.py` `ptq_baseline.py` `train_qat.py`
   `evaluate.py`), `export/` (`export_qonnx.py` `verify_qonnx.py`
   `check_join_scales.py` `finn_transforms.py` `finn_build.py`
-  `balance_folding.py`), `yolov5/` (vendored).
+  `balance_folding.py` `verify_qonnx_v8.py` `verify_finn_steps.py`),
+  `deploy/` (`postprocess.py` `run_on_board.py` + `petalinux/` — the board's
+  Linux image), `yolov5/` (vendored).
   `data/` + `runs/` are gitignored.
 
 ## Gotchas / notes
