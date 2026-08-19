@@ -1418,6 +1418,26 @@ error of ~14 px, nothing beyond one stride-8 cell.
    it, `step_yolov8_tidy_up` — exact to 5e-06 on random input — "gained" a
    detection. Compare only boxes above conf+0.05 and report the rest.
 
-**Still open:** accuracy itself is measured on the PyTorch model, i.e. under the
-Brevitas convention. The MultiThreshold convention is what ships. Re-running the
-val set through `step_yolov8_streamline` (~30 min) would close it.
+**CLOSED, same day — the convention costs nothing.**
+`scripts/center_error_onnx.py` scores a FINN checkpoint with the *same* centre-
+error metric used for every model here (constants and matching imported from
+`scripts/center_error.py`, not copied), 250 frames per regime:
+
+| regime | export (Brevitas) | FINN (MultiThreshold) |
+|---|---|---|
+| close | 245 TP, 12.19 px, 0.0119 | 246 TP, 12.26 px, **0.0121** |
+| mid | 224 TP, 7.30 px, 0.0072 | 224 TP, 7.25 px, **0.0071** |
+| long | 91 TP, 3.01 px, 0.0031 | 91 TP, 2.97 px, **0.0031** |
+
+n_TP matches to within one detection in 750 frames, and the centre error moves
+by at most 0.07 px **with no consistent sign** — worse on close, better on mid
+and long. That is noise, not bias. So every accuracy number recorded for this
+project under Brevitas rounding stands for the hardware.
+
+**SAMPLING TRAP, which produced a false alarm first time round.**
+`configs/val_*.txt` is **ordered by source**, so `paths[:n]` draws from only the
+first one or two of nine. The first attempt (close = sources A and B only)
+reported 0.0195 and looked like the 192×320 build geometry costing 40% of aim
+precision; stratified sampling gives 0.0119, in line with the recorded 0.0139.
+Nothing was wrong but the subset. Sample with a stride, never a prefix — and it
+matters here specifically because the effect being measured is data-dependent.
