@@ -18,10 +18,17 @@ TWO CONTRACT CHANGES that will produce nonsense if missed:
   - Layout goes NHWC internally but `global_in`/`global_out` stay NCHW, so no
     transposes are needed on either side.
 
-Checkpoints up to and including `step_yolov8_streamline` execute on the host.
-`step_yolov8_convert_to_hw_layers` needs FINN's custom ops, so run this inside
-the FINN docker to include it. Later steps are partitioned or folded and need
-cppsim/rtlsim instead.
+Checkpoints up to and including `step_yolov8_streamline` execute on the host and
+are skipped automatically if they cannot. `step_yolov8_convert_to_hw_layers`
+needs `finn.custom_op.fpgadataflow`, which exists only inside the FINN docker,
+and runs there at ~1 min/frame — so it goes through a two-phase harness in
+`$FINN_HOST_BUILD_DIR/verify_io/`: the host dumps letterboxed inputs to
+`inputs.npz`, `run_hw.py` executes the graph inside the container with nothing
+but numpy/qonnx/finn, and the decode and verdict happen back here. Measured
+2026-08-19 over 8 frames: **bit-exact against step_yolov8_streamline** (max
+delta 0.000e+00), so op-to-hardware-layer conversion changes nothing numerically.
+
+Later steps are partitioned or folded and need cppsim/rtlsim instead.
 
     uv run python -m export.verify_finn_steps
 """

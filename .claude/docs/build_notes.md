@@ -1368,3 +1368,56 @@ Deployment package = driver files + `top_wrapper.bit` as **`resizer.bit`** +
 name from the .bit) + `postprocess.py` + the dequant npz. 26 MB total.
 `runtime_weights/` is correctly **empty**: all 80 layers have
 `runtime_writeable_weights: 0`, so the weights are inside the bitstream.
+
+### 10.18 Verifying the path from PyTorch to the built graph, 2026-08-19
+Two checks, both standalone (no rebuild needed — the checkpoints are on disk):
+`export/verify_qonnx_v8.py` (export vs QAT model) and
+`export/verify_finn_steps.py` (FINN's rewriting vs the export).
+
+**Result, in order along the path:**
+
+| stage | vs previous | verdict |
+|---|---|---|
+| Brevitas export vs QAT torch | ±1 activation step, data-dependent | faithful |
+| frontend, `Quant` → `MultiThreshold` | 4.8e-06 on random input | exact (float noise) |
+| streamlining, 229 → 136 nodes | 2.7e-02 on 570/62,400 elements | ≤7% of one step |
+| `convert_to_hw_layers` | **0.000e+00** | **bit-exact** |
+
+So the only real numerical event on the whole path is the quantizer boundary
+convention, and it is introduced once, at the frontend.
+
+**EVERY divergence is an exact whole number of activation steps** (off-lattice
+residue ~1e-7). Brevitas rounds half-to-even on `x/s`; MultiThreshold compares
+against thresholds that were folded in float and then rounded to integers. A
+value landing exactly on a boundary can go either way. Neither is wrong, but
+**they are not equally relevant: MultiThreshold is what gets synthesised**, so
+the FINN checkpoints predict the board and the Brevitas export is the outlier.
+
+**It is BIMODAL per frame, and data-dependent.** A frame is either bit-identical
+or its whole output tensor shifts (62,150 of 62,400 elements) — one early LSB
+flip cascading. Median frame delta 0.032, worst 14.47. Flat sky puts many
+activations exactly on a threshold; **random input almost never does, and
+under-reports the disagreement by six orders of magnitude (4.8e-06 vs 14.47).
+Never verify a quantized graph on random data.**
+
+**It bites 17× harder at W4A4** than on the yolov5 W8A8 export, where the same
+check passes with a 2 px tolerance: the step is 6/15 = 0.4 against 6/255, and
+the v8 head has no output activation quantizer, so the flip lands in the summed
+logits.
+
+Functional impact over 60 close-regime frames: no detection lost, p95 centre
+delta **1.34 px** (tidy_up) and **0.54 px** (streamline) against a measured aim
+error of ~14 px, nothing beyond one stride-8 cell.
+
+**Two harness traps, both of which produced false alarms here:**
+1. **The FINN graph's input is UINT8, not float** — a ToTensor preprocessing is
+   merged in, so it consumes 0..255 and divides internally. Feeding it rounded
+   uint8 while feeding the export unrounded float measures input rounding, not
+   FINN: 5.52 instead of 4.8e-06.
+2. **The confidence threshold is a discontinuity.** Without a margin band around
+   it, `step_yolov8_tidy_up` — exact to 5e-06 on random input — "gained" a
+   detection. Compare only boxes above conf+0.05 and report the rest.
+
+**Still open:** accuracy itself is measured on the PyTorch model, i.e. under the
+Brevitas convention. The MultiThreshold convention is what ships. Re-running the
+val set through `step_yolov8_streamline` (~30 min) would close it.
