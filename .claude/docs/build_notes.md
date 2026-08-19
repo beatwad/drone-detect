@@ -1441,3 +1441,192 @@ reported 0.0195 and looked like the 192×320 build geometry costing 40% of aim
 precision; stratified sampling gives 0.0119, in line with the recorded 0.0139.
 Nothing was wrong but the subset. Sample with a stride, never a prefix — and it
 matters here specifically because the effect being measured is data-dependent.
+
+---
+
+## 11. Board bring-up: PetaLinux for ZCU102 — 2026-08-19
+
+The board is not in hand yet; everything below is host-side preparation so that
+bring-up is insert-card-and-go when it arrives.
+
+### 11.1 PetaLinux 2022.2 does not belong on this host — put it in a container
+
+The host is Ubuntu 26.04 with gcc 15.2, python 3.12 and `/bin/sh -> dash`.
+PetaLinux 2022.2 is Yocto **kirkstone**: its recipes predate gcc 13, bitbake 2.0
+predates python 3.12, and the tool assumes bash. Rather than fight that, the tool
+runs in an Ubuntu 22.04 container (`/home/alex/petalinux/docker/Dockerfile`,
+image `petalinux-host:22.04`), while the ~11 GB install and all projects live on
+a **bind mount** at `/home/alex/petalinux` — so rebuilding the image is free and
+the install survives. `plnx.sh` wraps `docker run` + `source settings.sh`:
+
+    ./plnx.sh -w projects/drone 'petalinux-build'
+
+Two packages must be added to a stock 22.04 or nothing works:
+
+- **`libtinfo5`** — `xsct` (which `petalinux-config` uses to read the XSA) links
+  against ncurses 5. Same trap the host hit with Vivado (CLAUDE.md), but the
+  symptom is unrecognisable: PetaLinux prints only *"Failed to generate
+  Kconfig.syshw"*. The real message — `error loading hsi package:
+  libtinfo.so.5: cannot open shared object file` — is in `build/config.log`.
+- **`xvfb`** — xsct refuses to run without an X display.
+
+**`--platform "aarch64"` cuts the install to 11 GB** (all four architectures is
+where the ~40 GB figure comes from). Total for install + a full build fits
+comfortably in ~115 GB free.
+
+**`--skip_license` exists but is absent from `--help`** (installer header line
+76). Without it the installer stops inside `less` on the second EULA, and no key
+sequence fed through a pipe will get it out.
+
+### 11.2 PetaLinux exits 0 when it fails
+
+Every failure above returned **exit code 0** with a one-line generic message.
+Never trust the exit status or the console output of a `petalinux-*` command —
+`build/config.log` holds the actual error. Budget for this: each real problem
+costs an iteration just to find out what it was.
+
+### 11.3 The XSA, and why it must come from *our* Vivado project
+
+`petalinux-config --get-hw-description` needs an `.xsa`, which FINN never
+produces. Export it from the project the `zynq_drone` harness built (§10.15):
+
+    open_project .../finn_zynq_link.xpr
+    open_run impl_1
+    write_hw_platform -fixed -include_bit -force drone_v8.xsa
+
+Verified to describe exactly the deployed design — `top.hwh` and the embedded
+bit are **md5-identical** to `resizer.hwh` / `resizer.bit` in the deployment
+package. That check is worth repeating after any rebuild: a boot image built
+against a different PS configuration than the bitstream will fail in ways that
+look like driver bugs.
+
+**Vivado batch consumes stdin itself.** `vivado -mode batch -source /dev/stdin`
+with a heredoc exits **0** having sourced nothing and written no file. The Tcl
+must be a real file.
+
+### 11.4 Machine name is not cosmetic — it decides whether USB 3.0 exists
+
+`petalinux-config` derives `CONFIG_SUBSYSTEM_MACHINE_NAME="template"` from a
+custom XSA, i.e. a generic ZynqMP with no board nodes. The ZCU102's PS-GTR
+mux is steered by four GPIO hogs on the TCA6416 (U97), and those live in
+`zcu102-rev1.0.dtsi`:
+
+    gtr_sel0 output-low    gtr_sel1 output-high
+    gtr_sel2 output-high   /* PCIE = 0, USB0 = 1 */
+    gtr_sel3 output-high
+
+That is SEL = **1110**, which UG1182 Table 3-43 maps to PCIe Gen2 x1 + DP.0 +
+**USB0** + SATA1. Leave the machine as `template` and the hogs are absent, so the
+SuperSpeed lane is never routed to USB no matter what the device tree says.
+Set `CONFIG_SUBSYSTEM_MACHINE_NAME="zcu102-rev1.0"` (the DTG board name — see
+`.../system-device-tree-xlnx/device_tree/data/kernel_dtsi/v5.4/board/`).
+
+Everything else the XSA got right and is worth recording as a cross-check
+against UG1182: console on **PSU_UART_0**, Ethernet on **PSU_ETHERNET_3** (GEM3),
+primary SD on **PSU_SD_1** — which is the same SD1 that boot mode 1110 selects.
+
+### 11.5 Deliberate deviations from the defaults
+
+- **rootfs EXT4 on `/dev/mmcblk0p2`, not INITRD.** The default puts the root
+  filesystem in RAM: anything pip-installed is lost on reboot and the size is
+  capped. We will `pip install pynq` and keep frames on the board.
+- **rootfs packages**: `python3`, `python3-numpy`,
+  `packagegroup-petalinux-python-modules` (pip), `xrt` + `zocl` (PYNQ 3.x
+  allocates buffers through XRT), `usbutils`, `v4l-utils`, `i2c-tools`,
+  `openssh`.
+- **kernel fragment `usb-camera.cfg`**: `CONFIG_PHY_XILINX_ZYNQMP` is the one
+  that bites — without the PS-GTR PHY driver the SuperSpeed lane never trains
+  and the port silently degrades to USB 2.0. Verify on the board with
+  `lsusb -t`: it must say **5000M**, not 480M.
+- **device tree `system-user.dtsi`**: `dr_mode = "host"` on `&dwc3_0`. Board
+  jumpers only supply VBUS; the controller's role is software.
+
+### 11.6 Do NOT build dwc3 host-only — it does not link
+
+The obvious fragment for a camera host is `CONFIG_USB_DWC3_HOST=y`. It breaks
+the kernel, ~40 minutes into the build:
+
+    drivers/usb/dwc3/core.c:1829: undefined reference to
+    `dwc3_gadget_exit_hibernation'
+    make: *** [Makefile:1183: vmlinux] Error 1
+
+Xilinx's 5.15 tree carries hibernation patches whose calls in `core.c` are not
+guarded on the gadget half being compiled, so host-only fails at link. Use
+**`CONFIG_USB_DWC3_DUAL_ROLE=y`** — both halves compile, and the role is chosen
+at runtime by `dr_mode = "host"` in the device tree, which is what we want
+anyway. This is also what Xilinx's own defconfig ships.
+
+The other two options in that fragment did take effect and are the ones that
+matter: `CONFIG_PHY_XILINX_ZYNQMP=y` and `CONFIG_USB_VIDEO_CLASS=y`.
+
+Recovery is cheap relative to the whole build — `petalinux-build -c linux-xlnx
+-x cleansstate` then `petalinux-build`; sstate keeps everything else (744 of
+3415 tasks were already cached on the failing run).
+
+### 11.7 Verify the device tree by decompiling it — one hole was already there
+
+The board nodes arrived with `zcu102-rev1.0` (TCA6416s, Si5341, i2c muxes,
+EEPROM), but the DTG's copy of the board dtsi **declares the GTR select lines
+without hogging them**, unlike the copy shipped with Vitis:
+
+    gpio@20 { compatible = "ti,tca6416";
+              gpio-line-names = "PS_GTR_LAN_SEL0\0PS_GTR_LAN_SEL1\0..."; };
+    /* ...and no gpio-hog children at all */
+
+TCA6416 pins power up as **inputs**, so the mux would have kept whatever the
+board pulls give — and UG1182 Table 3-43 maps SEL = 0000 to "PCIe Gen2 x4, no
+USB". USB 3.0 would simply not have existed, with nothing in dmesg pointing at
+the cause. Fixed in `system-user.dtsi` by hogging them through the label the
+dtb does export:
+
+    &tca6416_u97 {
+        gtr_sel0 { gpio-hog; gpios = <0 0>; output-low;  line-name = "sel0"; };
+        gtr_sel1 { gpio-hog; gpios = <1 0>; output-high; line-name = "sel1"; };
+        gtr_sel2 { gpio-hog; gpios = <2 0>; output-high; line-name = "sel2"; };
+        gtr_sel3 { gpio-hog; gpios = <3 0>; output-high; line-name = "sel3"; };
+    };
+
+**Always decompile `images/linux/system.dtb` and read it.** There is a dtc in
+the build tree (`build/tmp/sysroots-components/x86_64/dtc-native/usr/bin/dtc`),
+and the dtb keeps a `__symbols__` section, so labels like `tca6416_u97` are
+recoverable even though the recipe workdir is cleaned. Confirmed after the fix:
+`gtr_sel0` low + `gtr_sel1..3` high = **SEL 1110**, `dr_mode = "host"`,
+`maximum-speed = "super-speed"`.
+
+### 11.8 Boot image, deliberately without the bitstream
+
+    petalinux-package --boot --fsbl --u-boot --pmufw --force
+
+**No `--fpga`.** The FINN driver configures the PL at runtime via
+`pynq.Overlay('resizer.bit')`, so keeping the bitstream out of BOOT.BIN means
+retraining or refolding the network is a file copy, not a new boot image. The
+result is **1.77 MB** — a bitstream-bearing BOOT.BIN would be ~28 MB, which is
+the quick way to tell which you built.
+
+Artefacts for the card: `BOOT.BIN`, `image.ub` (9.3 MB), `boot.scr`,
+`rootfs.tar.gz` (77 MB). `mksd.sh` writes them.
+
+### 11.9 Board-side jumpers and boot mode, from UG1182 v1.7
+
+Boot mode is **SW6** (Table 2-4). Factory default is QSPI32; for SD boot only
+**SW6-3 and SW6-4 move, ON → OFF**:
+
+| Boot Mode | Mode Pins [3:0] | SW6 [4:1] |
+|---|---|---|
+| JTAG | 0000 | on, on, on, on |
+| QSPI32 *(default)* | 0010 | on, on, off, on |
+| **SD** | **1110** | **off, off, off, on** |
+
+USB host mode (Table 3-7) — defaults are set for *Device* mode, and only **two**
+jumpers change: **J7 OPEN → ON** (VBUS) and **J110 1-2 → 2-3** (CVBUS, 120 µF).
+J109 stays 2-3, J112 1-2, J113 1-2 — note J113 1-2 is *both* Host and Device, so
+it is easy to misread as needing a change.
+
+J96 is a USB 3.0 **micro-AB** connector, so a SuperSpeed micro-B → Type-A adapter
+is required; the common 5-pin USB 2.0 micro OTG adapter fits mechanically but has
+no SuperSpeed lanes and will silently give USB 2.0. Since J109 leaves the cable
+ID unused, the adapter does not need a grounded ID pin. Host VBUS runs through a
+MIC2544 with its fault flag on **DS51** — if a 900 mA camera trips the limit,
+that LED says so.
+
+Console is the CP2108 quad UART on **J83** (channels 0/1 are PS-side), 115200.

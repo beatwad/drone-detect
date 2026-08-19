@@ -20,8 +20,11 @@ THREE SHAPE/DTYPE CONVERSIONS, ALL EASY TO GET WRONG
                 split the per-channel Mul/Add out into the parent graph. The
                 accelerator emits raw INT21 NHWC instead, so the board side must
                 apply `postprocess.dequantize` before comparing.
-  M < N         the simulation runs ~1 min/image, so only the first few frames
-                have a golden output. The rest are still executed, for timing.
+  M vs N        all 60 frames have a golden output (2026-08-19). The comparison
+                still runs over min(M, N), so a shorter golden set is fine — any
+                extra frames are executed anyway, for timing. The simulation is
+                deterministic: re-running it reproduced the first 8 frames of the
+                earlier pass bit for bit.
 
 VERDICT
   The integer path should be exact and the dequantization is the same float32

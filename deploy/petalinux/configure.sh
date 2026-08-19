@@ -1,0 +1,51 @@
+#!/bin/bash
+# Apply this project's deviations to a freshly created PetaLinux project.
+#
+# Run after `petalinux-config --get-hw-description=<dir with the .xsa>
+# --silentconfig`, which produces the stock configuration; this script edits it
+# and installs the device-tree and kernel fragments. Then run
+# `petalinux-config --silentconfig && petalinux-config -c rootfs --silentconfig`
+# to regenerate, and `petalinux-build`.
+#
+# Every change here is explained in .claude/docs/build_notes.md §11.
+set -euo pipefail
+
+PROJ="${1:?usage: $0 /path/to/petalinux/projects/drone}"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+CFG="$PROJ/project-spec/configs/config"
+ROOTFS="$PROJ/project-spec/configs/rootfs_config"
+META="$PROJ/project-spec/meta-user"
+
+# 1. Board machine, not the generic ZynqMP template. This is what pulls in the
+#    ZCU102 nodes (TCA6416, Si5341, i2c muxes). Without it there is no board at
+#    all, and the PS-GTR mux that routes SuperSpeed to USB0 is never described.
+sed -i 's|^CONFIG_SUBSYSTEM_MACHINE_NAME=.*|CONFIG_SUBSYSTEM_MACHINE_NAME="zcu102-rev1.0"|' "$CFG"
+
+# 2. Persistent rootfs on the SD card. The default is an initrd in RAM, which
+#    loses every pip install on reboot and caps the filesystem size.
+sed -i 's|^CONFIG_SUBSYSTEM_ROOTFS_INITRD=y|# CONFIG_SUBSYSTEM_ROOTFS_INITRD is not set|' "$CFG"
+sed -i 's|^# CONFIG_SUBSYSTEM_ROOTFS_EXT4 is not set|CONFIG_SUBSYSTEM_ROOTFS_EXT4=y\nCONFIG_SUBSYSTEM_SDROOT_DEV="/dev/mmcblk0p2"|' "$CFG"
+
+# 3. Rootfs packages. NOT openssh: the base image already ships
+#    packagegroup-core-ssh-dropbear, and dnf refuses the conflict at do_rootfs.
+#    dropbear provides scp, which is all we need.
+for p in python3 python3-numpy packagegroup-petalinux-python-modules \
+         xrt zocl usbutils v4l-utils i2c-tools; do
+    sed -i "s|^# CONFIG_${p} is not set|CONFIG_${p}=y|" "$ROOTFS"
+done
+
+# 4. Device tree: USB host mode + the GTR mux hogs the DTG's board dtsi omits.
+#    Kernel: PS-GTR PHY (or SuperSpeed silently degrades to USB 2.0) and UVC.
+cp "$HERE/system-user.dtsi" "$META/recipes-bsp/device-tree/files/system-user.dtsi"
+cp "$HERE/usb-camera.cfg"   "$META/recipes-kernel/linux/linux-xlnx/usb-camera.cfg"
+grep -q usb-camera.cfg "$META/recipes-kernel/linux/linux-xlnx_%.bbappend" || cat >> "$META/recipes-kernel/linux/linux-xlnx_%.bbappend" <<'EOF'
+
+# USB 3.0 host + UVC for the machine-vision camera. See usb-camera.cfg.
+SRC_URI:append = " file://usb-camera.cfg"
+KERNEL_FEATURES:append = " usb-camera.cfg"
+EOF
+
+echo "applied. now:"
+echo "  petalinux-config --silentconfig && petalinux-config -c rootfs --silentconfig"
+echo "  petalinux-build"
+echo "  petalinux-package --boot --fsbl --u-boot --pmufw --force"

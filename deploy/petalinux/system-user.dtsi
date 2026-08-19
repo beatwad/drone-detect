@@ -1,0 +1,62 @@
+/*
+ * Device-tree overlay for the drone detector board bring-up.
+ *
+ * USB: the ZCU102's J96 is wired to PS-GTR lane 2 for SuperSpeed and to the
+ * SMSC USB3320C ULPI PHY for USB 2.0 (UG1182 p.33). The board jumpers select
+ * where VBUS comes from, but the controller's role is software: without
+ * dr_mode = "host" the port stays a device and no camera will enumerate.
+ * maximum-speed keeps it from silently negotiating down to high-speed.
+ */
+/include/ "system-conf.dtsi"
+
+/ {
+};
+
+&usb0 {
+	status = "okay";
+};
+
+&dwc3_0 {
+	status = "okay";
+	dr_mode = "host";
+	maximum-speed = "super-speed";
+	snps,usb3_lpm_capable;
+};
+
+/*
+ * PS-GTR lane routing. The board dtsi that PetaLinux's device-tree generator
+ * pulled in declares the TCA6416 (U97) and names its lines PS_GTR_LAN_SEL0..3,
+ * but does NOT hog them — unlike the copy shipped with Vitis. Without these the
+ * mux keeps its power-on state (TCA6416 pins default to inputs), and UG1182
+ * Table 3-43 maps SEL = 0000 to "PCIe Gen2 x4, no USB". So USB 3.0 would simply
+ * not exist, with nothing in the logs to say why.
+ *
+ * SEL = 1110 -> PCIe Gen2 x1 + DP.0 + USB0 + SATA1, which is the ZCU102's
+ * documented default combination and the one our PS configuration expects.
+ */
+&tca6416_u97 {
+	gtr_sel0 {
+		gpio-hog;
+		gpios = <0 0>;
+		output-low;		/* PCIE = 0, DP = 1 */
+		line-name = "sel0";
+	};
+	gtr_sel1 {
+		gpio-hog;
+		gpios = <1 0>;
+		output-high;
+		line-name = "sel1";
+	};
+	gtr_sel2 {
+		gpio-hog;
+		gpios = <2 0>;
+		output-high;		/* PCIE = 0, USB0 = 1 */
+		line-name = "sel2";
+	};
+	gtr_sel3 {
+		gpio-hog;
+		gpios = <3 0>;
+		output-high;		/* PCIE = 0, SATA = 1 */
+		line-name = "sel3";
+	};
+};
