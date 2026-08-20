@@ -1,38 +1,55 @@
 # drone-detect
 
-Ultra-fast drone detection system targeting a **FPGA-accelerated** deployment. 
-A vision system detects a drone and outputs angular/positional data to a downstream subsystem.
-Latency budget end-to-end ~10-20 ms.
+Close-range (≤10 m) drone detection for precision aiming, targeting an
+**FPGA-accelerated** deployment. A vision system detects a large-in-frame drone
+and outputs angular/positional data to a downstream kinetic aiming subsystem.
+Latency budget end-to-end ~50–100 ms.
 
-**Status: Proof of Concept.** The host-side float model is trained and passes its
-gate; quantization and FPGA synthesis are not started.
-
-Target pipeline:
+**Status: Proof of Concept, host side complete.** The detector is a bitstream on
+a ZCU102, the PYNQ driver exists, the numeric path from PyTorch to the built
+graph is verified end to end, and the board's Linux image is built. The board
+itself has not arrived, so exactly one junction is untested: real hardware
+against the simulation.
 
 ```
-YOLOv5n (float)  →  Brevitas QAT (INT8, SiLU→ReLU)  →  QONNX export  →  FINN  →  bitstream  →  PYNQ
-└──────────────────────── host GPU, board-agnostic ────────────────────────┘   └──── deferred ────┘
+yolov8n-P3 (float, ReLU6)  →  Brevitas QAT (W4A4)  →  QONNX  →  FINN  →  bitstream  →  PYNQ
+└──────────────── host GPU, board-agnostic ────────────────┘  └──── Vivado 2022.2 ────┘
 ```
 
 | Phase | What | State |
 |---|---|---|
 | 0 | Scaffolding | done |
-| 1 | Dataset acquisition + merge | done |
-| 2 | Augmentation (close-range framing) | done (in-loop, via hyp) |
-| 3 | Float training YOLOv5n — gate mAP50 > 0.85 | **done — mAP50 0.963** |
-| 4 | Brevitas QAT (INT8, SiLU→ReLU) | not started |
-| 5 | QONNX export | not started |
+| 1 | Dataset acquisition + merge | done — 36,903 images |
+| 2 | Augmentation (close-range framing) | done, in-loop via hyp |
+| 3 | Float training — gate mAP50 > 0.85 | done — **0.963** (v5n), **0.988** close (v8n-P3) |
+| 4 | Brevitas QAT | done — W8A8 free, W4A4 costs ~1 pt |
+| 5 | QONNX export | done, both gates pass |
+| 5b–5c | FINN build → bitstream | done — 30.0% LUT, 75.8% BRAM, timing closed |
+| 7 | Retarget to drones (yolov8n-P3) | done |
+| 8 | Board bring-up, host side | done — driver, verification, Linux image |
+| 9 | **Board bring-up, hardware** | **blocked: board not here** |
 
-Everything through QONNX export is board-agnostic and runs on the host GPU. FINN
-synthesis and everything downstream (camera/UVC on target, on-ARM NMS, latency
-validation) waits until a devkit is chosen.
+The network that actually ships is **yolov8n-P3 ReLU6 at W4A4, 192×320**, not the
+YOLOv5n the project started with. The v5n line is still here and still works; it
+is the historical baseline and the source of most of the dataset tooling.
+
+## Where the documentation lives
+
+| | |
+|---|---|
+| **this file** | how to reproduce, step by step |
+| [.claude/docs/build_notes.md](.claude/docs/build_notes.md) | **why** each step is the way it is — every measurement, every trap. ~1,600 lines, organised as findings, not instructions. Read the relevant § before changing anything in `qat/`, `export/` or a FINN build. |
+| [CLAUDE.md](CLAUDE.md) | current status, locked decisions, open questions |
+| [deploy/petalinux/README.md](deploy/petalinux/README.md) | the board's Linux image, in detail |
+| [.claude/docs/project_links.md](.claude/docs/project_links.md) | external references |
+| [TODO.md](TODO.md) | the tracking/post-processing flow, **not implemented yet** |
 
 ---
 
 ## 1. Install
 
 Requires **Python 3.11** and [uv](https://docs.astral.sh/uv/). An NVIDIA GPU with
-CUDA 12.1-capable drivers is expected for training; inference will fall back to CPU.
+CUDA 12.1-capable drivers is expected for training; inference falls back to CPU.
 
 ```bash
 git clone <this repo> drone-detect
@@ -40,17 +57,20 @@ cd drone-detect
 uv sync            # creates .venv/ from uv.lock, pinned torch 2.4.1+cu121
 ```
 
-Run everything through `uv run` so the vendored YOLOv5 and the cu121 torch build
-are picked up:
+Run everything through `uv run`:
 
 ```bash
 uv run python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 # 2.4.1+cu121 True
 ```
 
-YOLOv5 v7.0 is **vendored** at [yolov5/](yolov5/) (pin + local patches in
+Pinned versions that matter as a set: **torch 2.4.1+cu121, brevitas 0.13.0,
+qonnx 1.0.0, onnx 1.22, ultralytics 8.3.253, numpy <2**. Brevitas/QONNX/FINN are
+version-sensitive as a trio.
+
+YOLOv5 v7.0 is **vendored** at [yolov5/](yolov5/) (pin in
 [yolov5/VENDORED_PIN.txt](yolov5/VENDORED_PIN.txt)) — do not `pip install yolov5`
-or swap in master, which pulls the anchor-free rewrite and breaks the QAT plan.
+or swap in master, which pulls the anchor-free rewrite.
 
 Kaggle downloads need credentials at `~/.kaggle/kaggle.json` (manual step).
 
@@ -163,109 +183,341 @@ applied" before adding a source.
 
 ## 3. Train the float model
 
-Primary interface is the notebook — it has run control, live metrics, per-regime
-eval, and prediction visualization:
+Two lines exist. **yolov8n-P3 is what ships**; YOLOv5n is the historical baseline
+and the reason most of the dataset tooling exists.
+
+> **SiLU→ReLU is NOT swapped after training.** Train in ReLU (or ReLU6) from the
+> start — see §4. The older instruction to "keep stock SiLU here" was measured to
+> be wrong and has been removed.
+
+### 3.1 yolov8n-P3 ReLU6 — the network that ships
+
+The topology is the live subgraph of the reference build: yolov8n layers 0–15
+plus one stride-8 head, reproduced one-to-one in
+`configs/yolov8n_p3_relu6.yaml` (41/41 ops verified against the compiled graph).
+ReLU**6** rather than plain ReLU because the reference quantizes every activation
+to one shared range `[0, 6]` — which is also what makes join-tying free. The
+clamp is free: measured identical to plain ReLU on every regime.
+
+```bash
+uv run yolo detect train \
+  model=configs/yolov8n_p3_relu6.yaml \
+  pretrained=weights/yolov8n.pt \
+  data=configs/drone.yaml \
+  epochs=100 patience=30 batch=192 imgsz=320 \
+  optimizer=SGD lr0=0.03 mosaic=0.5 device=0 \
+  project=runs/train name=v8n_p3_relu6
+```
+
+Result (`runs/train/v8n_p3_relu62`): close **0.9855** / mid **0.9893** /
+long 0.8691. Beats the YOLOv5n-eighth variant on centre error *and* recall.
+
+**Disable Ultralytics' Conv+BN fusion** before quantizing — build_notes §10.13.
+
+### 3.2 YOLOv5n — the baseline
+
+Primary interface is the notebook (run control, live metrics, per-regime eval,
+prediction visualization):
 
 ```bash
 uv run jupyter lab      # then open training/train_baseline.ipynb
 ```
 
-Configure the run in the `CFG` cell (name, epochs, batch, hyp overrides) and run the
-launch cell; it shells out to `yolov5/train.py` and streams progress. Interrupting
-the kernel terminates the child and keeps the best checkpoint so far.
-
-The equivalent direct CLI, matching the current best run:
+The equivalent CLI, matching the best run:
 
 ```bash
 uv run python yolov5/train.py \
   --weights weights/yolov5n.pt \
   --data configs/drone.yaml \
-  --hyp configs/hyp_gen_more_data_5.yaml \
+  --hyp configs/hyp_gen_relu_more_data_5.yaml \
   --epochs 100 --batch-size 192 --imgsz 640 \
   --device 0 --workers 12 --patience 30 --seed 0 \
-  --project runs/train --name more_data_5
+  --project runs/train --name relu_more_data_5
 ```
 
-`weights/yolov5n.pt` is the **COCO-pretrained initialization**, not a drone model.
-It is gitignored; `train.py` auto-downloads it from the ultralytics v7.0 release if
-missing.
+`weights/yolov5n.pt` is the **COCO-pretrained initialization**, not a drone
+model. Use `configs/yolov5n_relu.yaml` for the ReLU variant that QAT consumes.
 
-**Batch scaling gotcha.** The `configs/hyp_gen_*.yaml` files are *generated* by the
-notebook, not hand-written. YOLOv5 pins its optimizer math to `nbs=64` and scales
-`weight_decay` by the batch multiplier but never touches `lr0`. So for
-`batch = 64*m` the notebook pre-adjusts `lr0 *= m` (linear scaling rule) and
-`weight_decay /= m` (cancelling YOLOv5's own multiply), keeping the training regime
-constant as batch changes. If you write a hyp file by hand at a non-64 batch, you
-have to do this yourself. The current run used `m = 3` → batch 192, `lr0` 0.03.
+**Batch scaling gotcha.** The `configs/hyp_gen_*.yaml` files are *generated* by
+the notebook. YOLOv5 pins its optimizer math to `nbs=64`, scales `weight_decay`
+by the batch multiplier, and never touches `lr0`. So for `batch = 64*m` the
+notebook pre-adjusts `lr0 *= m` and `weight_decay /= m`, keeping the training
+regime constant. Writing a hyp file by hand at a non-64 batch means doing this
+yourself. The current run used `m = 3` → batch 192, `lr0` 0.03.
 
-**Augmentation.** Close-range framing comes from the in-loop augmentation
-(`scale: 0.5`, `translate: 0.1`, `fliplr: 0.5`), not from an offline pass — there is
-no separate augmented dataset on disk. Note `mosaic: 0.5` rather than the stock 1.0:
-mosaic at 1.0 costs about 12 points of empty-frame false-alarm rate, and the damage
-is **invisible to val mAP**. Don't raise it back without checking the false-alarm cell.
+**Augmentation.** Close-range framing comes from in-loop augmentation
+(`scale: 0.5`, `translate: 0.1`, `fliplr: 0.5`), not an offline pass — there is
+no augmented dataset on disk. Note `mosaic: 0.5` rather than the stock 1.0:
+mosaic at 1.0 costs ~12 points of empty-frame false-alarm rate, and the damage is
+**invisible to val mAP**. Don't raise it without checking the false-alarm cell.
 
-**SiLU→ReLU** is deliberately *not* swapped here. The float model trains with stock
-SiLU for the strongest baseline; ReLU substitution happens at the QAT stage. Note
-YOLOv5 shares one class-level `Conv.default_act = nn.SiLU()` across all Conv layers,
-so `model.modules()` reports a single SiLU — the swap is done by rebinding
-`Conv.default_act` before instantiation, not by per-layer object replacement.
+YOLOv5 shares one class-level `Conv.default_act` instance across all Conv layers,
+so `model.modules()` reports a single activation — swapping means rebinding
+`Conv.default_act` before instantiation, not replacing per-layer objects.
 
 ### Evaluation
 
-Notebook cells 6–6c cover what actually matters, beyond aggregate mAP:
-per-regime mAP, mean IoU of matched true positives, **mean center error** in pixels
-and as a fraction of image diagonal, and false positives per regime. 
-`empty` has no ground truth, so it is scored as a background
-false-alarm rate instead of mAP.
-
-Per-regime val from the CLI:
+Per-regime mAP, mean IoU of matched true positives, **mean centre error** in
+pixels and as a fraction of image diagonal, and false positives per regime.
+`empty` has no ground truth and is scored as a background false-alarm rate.
 
 ```bash
 uv run python yolov5/val.py \
-  --weights runs/train/more_data_5/weights/best.pt \
+  --weights runs/train/relu_more_data_5/weights/best.pt \
   --data configs/drone_val_close.yaml --imgsz 640 --device 0
+
+uv run python scripts/center_error.py \
+  --weights runs/train/relu_more_data_5/weights/best.pt --regimes close mid long
 ```
 
-(`drone_val_{close,mid,long,empty}.yaml` each point `val:` at the matching
-`configs/val_<regime>.txt`.)
+> **Never compare mAP across runs built on different val sets.** The dataset
+> changed repeatedly during development; older numbers in `runs/` are not
+> comparable to current ones.
 
-> **Never compare mAP across runs built on different val sets.** The dataset changed
-> repeatedly during development; older run numbers in `runs/` are not comparable to
-> current ones.
-
----
-
-## 4. Where the weights are
+### Where the weights are
 
 | Path | What |
 |---|---|
-| `weights/yolov5n.pt` | COCO-pretrained init used to start training. **Not a drone detector.** |
-| `runs/train/<run>/weights/best.pt` | Trained drone detector, best val epoch |
-| `runs/train/<run>/weights/last.pt` | Trained drone detector, final epoch |
-
-**Current best: `runs/train/more_data_5/weights/best.pt`** — YOLOv5n, 3.9 MB,
-trained on the 36.9k-image merged set.
-
-Final val: **P 0.949 · R 0.925 · mAP50 0.963 · mAP50-95 0.662** — past the >0.85 gate.
-
-Each run directory also holds `opt.yaml` (the exact args it ran with), `results.csv`
-(per-epoch metrics), and plots. Runs are also logged to Weights & Biases; the run id
-is saved to `wandb_run_id.txt` so eval metrics attach to the training run rather than
-landing beside it.
-
-`runs/` is gitignored — **these weights exist only on the machine that trained them.**
-Back up any checkpoint you care about.
+| `weights/yolov5n.pt`, `weights/yolov8n.pt` | COCO-pretrained inits. **Not drone detectors.** |
+| `runs/train/v8n_p3_relu62/weights/best.pt` | **the float model that ships** |
+| `runs/qat/v8n_p3_w4a4/weights/best.pt` | **the quantized model that ships** |
+| `runs/train/relu_more_data_5/weights/best.pt` | YOLOv5n ReLU baseline, mAP50 0.963 |
 
 ---
 
-## 5. Run the model on a webcam stream
+## 4. Quantization-aware training
+
+Read [build_notes.md](.claude/docs/build_notes.md) §1, §9, §10.9–10.10 first.
+Three things here are load-bearing and none is obvious.
+
+### The rules that cannot be repaired later
+
+1. **Train float in ReLU/ReLU6 from the start.** Pasting ReLU into SiLU-trained
+   weights destroys the model — mAP50 0.963 → **0.078**, because ~49% of
+   pre-activations are negative and ReLU zeroes them across 57 layers. This
+   reverses the project's original plan; the plan was wrong.
+2. **Tie the quantiser at every join.** FINN can only streamline a join whose
+   branches share one scale: `a·x + b·y` does not factor unless `a == b`. This
+   is a QAT-time decision that **cannot** be fixed at export. Costs nothing in
+   accuracy. Gate: `check_join_scales.py` must report all joins tied.
+   For yolov8n-P3 the reference's "comact" convention makes this free — every
+   activation shares one range, `[0, 6]`, which is why the float model is ReLU6.
+3. **Every shared quantiser needs a plain `nn.ReLU()` in front of it.**
+
+### W8A8 needs no fine-tuning at all
+
+Post-training calibration alone scores mAP50 **0.9628** vs float 0.9629. The
+fine-tune budget only earns its keep at 4-bit, where PTQ collapses (0.197).
+
+```bash
+uv run python qat/ptq_baseline.py          # calibrate-only baseline
+```
+
+### W4A4, the configuration that ships
+
+```bash
+uv run python qat/train_qat_v8.py \
+  --weights runs/train/v8n_p3_relu62/weights/best.pt \
+  --data configs/drone.yaml \
+  --low-bits 4 --high-bits 8 \
+  --epochs 30 --imgsz 320 --batch 192 --lr0 0.002 --mosaic 0.5 --device 0
+```
+
+`--low-bits 4 --high-bits 8` is the reference's mixed scheme: W8 on the stem and
+head, W4 through the middle. W4 is not a micro-optimisation — it is what lets
+FINN pack MACs into DSPs instead of LUT fabric, which moves the whole design into
+a different cost class (LUT estimate ×1.44 instead of ×2.73, and CARRY8 usage
+from 104% to 4.6%). See build_notes §10.7.
+
+Result: `runs/qat/v8n_p3_w4a4/weights/best.pt` — close 0.9835 / mid 0.9879 /
+long 0.8514, centre error unchanged at 0.0139.
+
+```bash
+uv run python qat/evaluate.py --ckpt runs/qat/v8n_p3_w4a4/weights/best.pt --imgsz 320
+```
+
+> **Judge quantization by centre error, not mAP50-95.** The number that reaches
+> the aiming subsystem is where the box centre lands. mAP50-95 moves for reasons
+> that never touch aim.
+
+The YOLOv5n equivalents are `qat/quantize.py` / `qat/train_qat.py`.
+
+---
+
+## 5. QONNX export
+
+```bash
+uv run python export/export_qonnx_v8.py \
+  --ckpt runs/qat/v8n_p3_w4a4/weights/best.pt \
+  --imgsz 192 320 \
+  --out export/v8n_p3_w4a4_192x320.onnx
+```
+
+Build resolution is **192×320**, not square — build_notes §10.12. `C2f.chunk`
+must become `split` for FINN's frontend; the export script handles it.
+
+Two gates, both of which must pass before FINN is worth starting:
+
+```bash
+uv run python export/check_join_scales.py --onnx export/v8n_p3_w4a4_192x320_clean.onnx
+uv run python export/verify_qonnx_v8.py \
+  --onnx export/v8n_p3_w4a4_192x320_clean.onnx \
+  --ckpt runs/qat/v8n_p3_w4a4/weights/best.pt --n-images 40
+```
+
+`verify_qonnx_v8.py` compares detections against the torch model it came from.
+Expect deltas of **exactly ±1 activation step** — that is the quantizer boundary
+convention, not a bug: Brevitas rounds half-to-even on `x/s`, while the graph
+compares against integer-rounded thresholds. Acceptance is "no detection gained
+or lost, median centre delta < 0.5 px, nothing moves more than one cell".
+
+---
+
+## 6. FINN build → bitstream
+
+**This is the step that will not reproduce from a clean checkout.** See the
+honesty section below before starting. Requires Vivado/Vitis 2022.2 and runs
+inside FINN's Docker; budget most of a day.
+
+### Folding first — it is the whole game
+
+`--target-fps` under-folds by ~11× and produces FIFOs Vivado cannot build.
+Search against real resource limits instead:
+
+```bash
+uv run python export/balance_folding.py \
+  --onnx export/v8n_p3_w4a4_192x320_clean.onnx \
+  --headroom 0.27 --out folding.json
+```
+
+The headroom is not decoration: FINN's own estimates are low by **×1.44 on LUT**
+and **×2.86 on BRAM** (it excludes FIFOs from `estimate_layer_resources`). BRAM
+is the binding constraint, not LUT. Both multipliers have now been measured on
+two unrelated networks and predicted the third within 3.2%, so treat them as a
+budgeting rule.
+
+### The build
+
+```bash
+# inside FINN's docker
+python export/finn_build.py \
+  --onnx export/v8n_p3_w4a4_192x320_clean.onnx \
+  --folding-config folding.json \
+  --clk-ns 10 --standalone-thresholds --bitfile
+```
+
+**`BD 5-336` will hit this build.** It is unfixed in FINN and recurs every time:
+FINN registers a 460 KB `ip_repo_paths` list, Vivado's catalog evicts the
+partition wrapper's definition, and `validate_bd_design` fails hours in. The
+workaround is a harness that consolidates every IP into one repository directory
+and patches the generated `ip_config.tcl` — build_notes §10.15. **Prepare it
+before launching, not after the failure.**
+
+Result on ZCU102 (2026-08-15): 82,222 LUT (30.0%), 691 BRAM tiles (75.8%),
+334 DSP (13.3%), WNS **+1.765 ns** at 100 MHz → ~121 MHz achievable, 5.10 W of
+which the PS alone is 2.74 W.
+
+### Verify the compiled graph, do not assume it
+
+```bash
+uv run python export/verify_finn_steps.py --build <build dir> \
+  --onnx export/v8n_p3_w4a4_192x320_clean.onnx --n-images 40
+uv run python scripts/center_error_onnx.py --onnx <checkpoint> --n 250
+```
+
+Measured: FINN's frontend is exact (4.8e-06), streamlining touches 570 of 62,400
+values by ≤2.7e-02, and **`convert_to_hw` is bit-exact**. Aim error is
+unchanged. So every accuracy number recorded on the host stands for the hardware.
+
+> **Sampling trap.** `configs/val_*.txt` is ordered by source, so `paths[:n]`
+> draws from only the first one or two of nine. Sample with a stride. This
+> produced a false "192×320 costs 40% of aim precision" alarm once.
+
+---
+
+## 7. Driver and deployment package
+
+FINN generates the PYNQ driver in `step_make_pynq_driver` — which never runs if
+the build died at `MakeZYNQProject`. Recovering it needs the parent graph
+ZynqBuild produces (input IODMA → dataflow → output IODMA); the three children
+survive in `intermediate_models/kernel_partitions/` and the parent is five lines
+of graph rebuilt from them. build_notes §10.17.
+
+The accelerator's contract:
+
+```
+in    UINT8   (1, 192, 320, 3)   NHWC
+out   INT21   (1, 24,  40, 65)   NHWC, packed (1,24,40,65,3)
+```
+
+**The output is raw integers and the dequantization is not optional.** FINN's
+`step_create_dataflow_partition` leaves the final per-channel `Mul`/`Add` in the
+*parent* graph, outside the accelerator. The true value is
+`int21 * scale[c] + bias[c]` with scale ~1e-4; the reference driver omits this
+and applies sigmoid/softmax straight to values ~10⁴ too large. Constants live in
+[deploy/v8n_p3_w4a4_192x320_dequant.npz](deploy/v8n_p3_w4a4_192x320_dequant.npz)
+and change on every rebuild.
+
+[deploy/postprocess.py](deploy/postprocess.py) does dequantize → DFL → boxes →
+sigmoid → NMS in NumPy only, checked against Ultralytics' own head to 6.1e-05 px.
+
+---
+
+## 8. Linux image for the board
+
+Full recipe in [deploy/petalinux/README.md](deploy/petalinux/README.md); the
+short version is that PetaLinux 2022.2 runs in a container (this host is far too
+new for Yocto kirkstone), the XSA comes from the Vivado project the FINN harness
+built, and three settings are load-bearing: `MACHINE_NAME=zcu102-rev1.0`, the
+**GTR mux hogs the device-tree generator omits** (without them SEL=0000 and USB
+3.0 does not exist), and `CONFIG_USB_DWC3_DUAL_ROLE` (host-only does not link).
+
+`petalinux-*` commands **exit 0 when they fail**; the real error is in
+`build/config.log`.
+
+---
+
+## 9. First run on hardware
+
+Not done — the board has not arrived.
+
+| | |
+|---|---|
+| Boot mode | **SW6 [4:1] = off, off, off, on** (SD; factory default is QSPI32) |
+| USB host | **J7 OPEN → ON**, **J110 1-2 → 2-3**; J109/J112/J113 unchanged |
+| Console | CP2108 on J83, 115200 8N1, first of four `/dev/ttyUSB*` |
+
+```bash
+deploy/petalinux/mksd.sh /dev/sdX          # dry run
+deploy/petalinux/mksd.sh /dev/sdX --yes    # writes the card
+```
+
+Then, on the board, the one check the host cannot make:
+
+```bash
+python3 run_on_board.py
+```
+
+[deploy/run_on_board.py](deploy/run_on_board.py) runs 60 frames through the real
+accelerator and compares INT21 against the same frames through the simulated
+graph, in LSB units. Tolerance **0.05 LSB**: a genuine error is 1.0, float32
+noise at these magnitudes is ~0.008. Positive and negative controls both pass on
+the host, so a failure means hardware, not harness.
+
+Still missing before this works: **`pip install pynq` over the built XRT.** No
+official PYNQ image exists for the ZCU102 — this is the one genuinely unknown
+step left in the chain.
+
+---
+
+## 10. Run a model on a webcam stream
 
 The vendored `detect.py` handles webcams natively — a numeric `--source` selects a
 device index and routes through the threaded `LoadStreams` reader.
 
 ```bash
 uv run python yolov5/detect.py \
-  --weights runs/train/more_data_5/weights/best.pt \
+  --weights runs/train/relu_more_data_5/weights/best.pt \
   --source 0 \
   --imgsz 640 \
   --conf-thres 0.25 \
@@ -298,23 +550,72 @@ script working off the pre-NMS boxes.
 
 ---
 
-## 6. Repo layout
+## What will NOT reproduce out of the box
+
+Stated plainly, because a clean list of commands would otherwise be a lie.
+
+- **FINN needs the authors' fork, not upstream.** Neither `finn` v0.10.1 nor
+  `finn-dev` works alone: v0.10.1 cannot compile a joined graph at all, and the
+  authors' fork ships a `finn-hlslib` that predates a fix every concat needs. The
+  working combination is their fork **plus one `concat.hpp` from finn-dev**.
+  build_notes §10.1–10.2.
+- **`BD 5-336` is unfixed upstream** and will hit every bitstream build. The
+  harness that works around it (`ip_config_drone.tcl`, a consolidated IP
+  repository, `run.sh`/`inner.sh`) lives outside this repo, in the FINN build
+  directory. build_notes §10.15 describes it completely; it is not committed.
+- **Vivado/Vitis 2022.2 exactly.** Not the latest, and not the 2022.2.2 update.
+- **PetaLinux 2022.2** is a 2.7 GB installer behind an AMD account login.
+- **The reference YOLOv8n's Brevitas source is not public.** `qat/quantize_v8.py`
+  reproduces its quantization scheme by matching the released ONNX op-for-op
+  (41/41 verified), not by using their code.
+- **Datasets are not redistributable** — nine sources, two from Kaggle (needs an
+  API token) and seven downloaded by hand from Roboflow Universe.
+- **`data/`, `runs/` and `weights/` are gitignored.** Trained checkpoints exist
+  only on the machine that trained them. Back up anything you care about.
+
+## Repo layout
 
 ```
-configs/       dataset yamls, per-regime val subsets, generated hyp files
-data/          raw sources + merged set + manifest.csv        (gitignored)
-export/        QONNX export                                   (phase 5, empty)
-qat/           Brevitas QAT                                   (phase 4, empty)
-runs/          training runs + checkpoints                    (gitignored)
-scripts/       dataset merge + cleaning tools
+configs/       dataset yamls, per-regime val subsets, model yamls, generated hyps
+data/          raw sources + merged set + manifest.csv          (gitignored)
+deploy/        postprocess.py, run_on_board.py, dequant constants
+  petalinux/   the board's Linux image: Dockerfile, configure.sh, dtsi, mksd.sh
+export/        QONNX export, verification gates, FINN driver + folding search
+qat/           Brevitas QAT — quantize/train/evaluate, v5 and v8 variants
+runs/          training runs + checkpoints                      (gitignored)
+scripts/       dataset merge + cleaning, centre-error metrics
 training/      train_baseline.ipynb — float training & evaluation
-weights/       COCO-pretrained yolov5n.pt                     (gitignored)
+weights/       COCO-pretrained initialisations                  (gitignored)
 yolov5/        vendored ultralytics/yolov5 v7.0 @ 915bbf2, locally patched
 ```
 
-## 7. Conventions
+## Conventions
 
 - Commit and push only when asked.
 - Change only what's necessary; no unrequested tests or examples.
-- The devkit is **undecided** — do no devkit-specific work (PYNQ image, FINN
-  part-targeting, camera, actuator) until the board is chosen.
+- The devkit is **ZCU102** (chosen 2026-08-03) and is deliberately oversized —
+  experiment freely, but do not let its headroom drive architecture decisions.
+  The deployment target is a smaller ~2–5 W UltraScale+ part, still undecided.
+- Record the on-chip footprint of anything trained, so we know what ports.
+
+## What the original plan got wrong
+
+Kept from the phased host-side plan this README replaces, because the errors are
+more instructive than the plan was.
+
+- **The SiLU→ReLU ordering.** The plan said swap at QAT; measurement said the
+  opposite. Caught only because the pasted-ReLU model scored 0.078. The single
+  costliest planning error.
+- **"Fine-tune 20–30 epochs to recover accuracy."** At INT8 there was nothing to
+  recover. Budgeted training time for a problem that did not exist.
+- **The dataset regime assumption**, inherited from the brief: it claimed both
+  sources were long/medium range. Source A was already close-range (median box
+  33% of frame). We had the data we needed and did not know it.
+- **"C3 blocks may need simplification for clean FINN compilation."** They did
+  not. C3, SPPF and the full FPN all compile untouched.
+- **"FINN cannot compile branched networks."** Refuted 2026-08-04. Joins compile;
+  they just need their branches to share one quantisation scale.
+- **What the plan never anticipated at all:** that the hard part would be neither
+  accuracy nor quantization, but **join scales, folding, and toolchain
+  archaeology**. Phases 0–5 landed close to schedule. Everything expensive has
+  been downstream of the QONNX handoff.

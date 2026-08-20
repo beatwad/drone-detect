@@ -5,9 +5,9 @@ Close-range (≤10 m) drone detection for precision aiming, targeting an
 and outputs angular/positional data to a downstream kinetic aiming subsystem.
 Latency budget end-to-end ~50–100 ms. Status: **Proof of Concept**.
 
+Reproduction instructions for the whole chain are in [README.md](README.md).
 Full source docs live in [.claude/docs/](.claude/docs/):
 - [project_brief.md](.claude/docs/project_brief.md) — hardware, toolchain, datasets, roadmap, risks.
-- [host_pipeline_plan.md](.claude/docs/host_pipeline_plan.md) — the phased host-side plan we're executing.
 - [build_notes.md](.claude/docs/build_notes.md) — **everything measured about QAT →
   QONNX → FINN → bitstream.** Read this before touching `qat/`, `export/`, or
   running a FINN build; it is where all the hard-won toolchain detail lives.

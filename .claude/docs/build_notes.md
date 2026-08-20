@@ -6,7 +6,7 @@ measurement, the date is given; where it came from reading source, the file and
 line are given.
 
 Companion docs: [project_brief.md](project_brief.md) (hardware, datasets, roadmap),
-[host_pipeline_plan.md](host_pipeline_plan.md) (the phased plan these notes execute).
+[../../README.md](../../README.md) (how to reproduce; these notes say why).
 Project-level status, locked decisions and open questions live in
 [CLAUDE.md](../../CLAUDE.md).
 
