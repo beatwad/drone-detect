@@ -28,6 +28,7 @@ yolov8n-P3 (float, ReLU6)  →  Brevitas QAT (W4A4)  →  QONNX  →  FINN  → 
 | 7 | Retarget to drones (yolov8n-P3) | done |
 | 8 | Board bring-up, host side | done — driver, verification, Linux image |
 | 9 | **Board bring-up, hardware** | **blocked: board not here** |
+| 10 | Tracking + aim output (§11) | **not started** — spec only |
 
 The network that ships is **yolov8n-P3 ReLU6 at W4A4, 192×320**. The project
 started on YOLOv5n and that line was removed once it stopped being used; the
@@ -42,7 +43,7 @@ is in git.
 | [.claude/docs/build_notes.md](.claude/docs/build_notes.md) | **why** each step is the way it is — every measurement, every trap. ~1,600 lines, organised as findings, not instructions. Read the relevant § before changing anything in `qat/`, `export/` or a FINN build. |
 | [CLAUDE.md](CLAUDE.md) | current status, locked decisions, open questions |
 | [deploy/petalinux/README.md](deploy/petalinux/README.md) | the board's Linux image, in detail |
-| [TODO.md](TODO.md) | the tracking/post-processing flow, **not implemented yet** |
+| [TODO.md](TODO.md) | the original sketch of the tracking flow, now written up as §11 |
 
 ---
 
@@ -527,12 +528,56 @@ uv run yolo predict \
 ### Caveat: this is a demo harness
 
 `predict` is per-frame and stateless — NMS, annotate, display. It answers *"does
-the model see the drone through my camera"*, and nothing more. The tracking logic
-sketched in [TODO.md](TODO.md) — seed-box selection nearest screen centre, IoU
-cluster gathering, weighted box fusion, Kalman predict/update with a miss counter
-and re-seeding, then a hysteresis + debounce gate producing the centre offset and
-a `close_enough` flag — **is not implemented anywhere yet.** It needs a separate
-script working off the pre-NMS boxes.
+the model see the drone through my camera"*, and nothing more. Everything that
+turns detections into an aim command is specified in §11 and **not implemented**.
+
+---
+
+## 11. Tracking and aim output — NOT IMPLEMENTED
+
+This is the last piece of the pipeline and none of it exists yet: no script, no
+tests, no measurements. It is specified here so the spec lives with everything
+else rather than in a stray file.
+
+It consumes the **pre-NMS** boxes — `deploy/postprocess.decode()` output, before
+`nms()` — and emits two things for the aiming subsystem: the centre offset, and a
+`close_enough` flag.
+
+```
+1. Seed box      of the pre-NMS boxes, keep conf > thresh_conf;
+                 pick the one closest to screen centre.
+                 none -> close_enough = False, exit.
+2. Cluster       collect every box with IoU > thresh_iou against the seed.
+3. Fuse          WBF over the cluster -> one measured box.
+4. Predict       Kalman predict -> predicted box.
+5. Gate          IoU(measured, predicted) > thresh_frame_iou ?
+                   yes -> miss_counter = 0
+                   no  -> miss_counter += 1, append measured to the recent list
+                          if miss_counter > M:
+                              re-seed the filter from the last consecutive boxes
+                              that agree with each other by thresh_frame_iou
+                          close_enough = False, exit.
+6. Update        Kalman update -> smoothed centre -> offset from frame centre,
+                 and its magnitude `dist`.
+7. Centring gate hysteresis on `dist` (D_low / D_high) + debounce over N frames
+                 -> close_enough.
+```
+
+Notes that are not in the sketch but follow from decisions already made:
+
+- **Step 1 assumes a boresight-aligned frame.** Picking the box nearest the
+  centre is only meaningful because the deployment plan is a centre crop, which
+  needs no coordinate transform to become an aim angle. If the crop ever becomes
+  steerable, this step needs the transform.
+- **Single target by construction.** The seed-and-cluster structure resolves one
+  object, deliberately: the system aims at one drone. Full NMS is not required —
+  the cluster step already collapses duplicates around the seed.
+- **Where it runs is undecided.** Nothing above needs the fabric; it is a few
+  hundred operations per frame. The current plan is the R5F cores, with a move
+  into PL only if it lands alongside a MIPI camera. See CLAUDE.md.
+- **Parameters unset.** `thresh_conf`, `thresh_iou`, `thresh_frame_iou`, `M`,
+  `D_low`, `D_high`, `N` all need measuring against real footage, which needs the
+  camera and the lens — open question 1.
 
 ---
 
