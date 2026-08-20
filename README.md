@@ -563,6 +563,7 @@ Stated plainly, because a clean list of commands would otherwise be a lie.
 ## Repo layout
 
 ```
+.claude/docs/  build_notes.md — the measured record behind every decision
 configs/       dataset yamls, per-regime val subsets, model yamls, generated hyps
 data/          raw sources + merged set + manifest.csv          (gitignored)
 deploy/        postprocess.py, run_on_board.py, dequant constants
