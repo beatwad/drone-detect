@@ -5,8 +5,8 @@ Everything measured on the way from a float checkpoint to an FPGA accelerator.
 measurement, the date is given; where it came from reading source, the file and
 line are given.
 
-Companion docs: [project_brief.md](project_brief.md) (hardware, datasets, roadmap),
-[../../README.md](../../README.md) (how to reproduce; these notes say why).
+Companion doc: [../../README.md](../../README.md) — how to reproduce the whole
+chain; these notes say why each step is the way it is.
 Project-level status, locked decisions and open questions live in
 [CLAUDE.md](../../CLAUDE.md).
 

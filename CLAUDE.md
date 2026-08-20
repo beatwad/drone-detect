@@ -7,7 +7,6 @@ Latency budget end-to-end ~50–100 ms. Status: **Proof of Concept**.
 
 Reproduction instructions for the whole chain are in [README.md](README.md).
 Full source docs live in [.claude/docs/](.claude/docs/):
-- [project_brief.md](.claude/docs/project_brief.md) — hardware, toolchain, datasets, roadmap, risks.
 - [build_notes.md](.claude/docs/build_notes.md) — **everything measured about QAT →
   QONNX → FINN → bitstream.** Read this before touching `qat/`, `export/`, or
   running a FINN build; it is where all the hard-won toolchain detail lives.

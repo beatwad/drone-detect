@@ -434,52 +434,6 @@ unchanged. So every accuracy number recorded on the host stands for the hardware
 
 ---
 
-### References this build leans on
-
-The FPGA path is not original work — it follows two published builds, and two
-FINN discussions supply numbers used in the resource budget.
-
-- **Danilowicz & Kryjak, ARC 2025** — branched YOLOv8n on ZCU102, W4A4, 320×192.
-  <https://arxiv.org/abs/2503.13023>. The topology in
-  `configs/yolov8n_p3_relu6.yaml` reproduces the live subgraph of their released
-  model, and their FINN fork is the one that compiles it.
-  Their fork: <https://github.com/mdanilow/finn> branch `yolov8_dev` — **read it,
-  don't clone it**; the substance is merged upstream. Sparse checkout, to avoid
-  pulling a full FINN history:
-
-  ```bash
-  git clone --depth 1 --branch yolov8_dev --filter=blob:none --no-checkout \
-      https://github.com/mdanilow/finn.git
-  cd finn && git sparse-checkout set notebooks/experiments && git checkout
-  ```
-
-  Useful files: `notebooks/experiments/yolov8/{build_yolov8.py,
-  final_hw_config_90fps.json,yolov8_output_dir/report/}`.
-- **Calì, Falaschetti & Biagetti, Electronics 2025, 14, 3993** — YOLOv3-Tiny on a
-  Zynq-7020, 208 FPS, 2.55 W. <https://doi.org/10.3390/electronics14203993>.
-  Source of the folding-balance method (§3.6.1) that `export/balance_folding.py`
-  implements, and of the ×2 BRAM rule used for portability estimates.
-  Code: <https://github.com/sn0wst0rm/FINN-VisDrone-YOLO> ·
-  thesis: <https://tesi.univpm.it/handle/20.500.12075/20897>
-- **LPYOLO** (Günay, Okcu, Bilge 2022) — the network the Electronics paper
-  reuses, and the model behind `configs/yolov5_pico.yaml`.
-  <https://github.com/sefaburakokcu/quantized-yolov5>
-- **FINN discussion 1021 — DSP packing in MVAU/VVU.**
-  <https://github.com/Xilinx/finn/discussions/1021>. Where the MAC-per-DSP
-  figures come from: RTL DSP48E2 packs 4 MACs at W4A4 and 2 at W8A8, HLS packs
-  none. This is why `MVAU_rtl` at W4 is a different cost class, not a tweak.
-- **FINN discussion 383 — FIFO depth between layers.**
-  <https://github.com/Xilinx/finn/discussions/383>. The over/under-sizing
-  tradeoff behind three failed bitfile builds.
-- **RTL ConvolutionInputGenerator** (`parallel_window`) —
-  <https://finn.readthedocs.io/en/latest/internals.html#rtl-convolutioninputgenerator>
-
-Toolchain homes: [FINN](https://github.com/Xilinx/finn) ·
-[Brevitas](https://github.com/Xilinx/brevitas) · [PYNQ](https://www.pynq.io) ·
-[YOLOv5 v7.0](https://github.com/ultralytics/yolov5) (vendored)
-
----
-
 ## 7. Driver and deployment package
 
 FINN generates the PYNQ driver in `step_make_pynq_driver` — which never runs if
@@ -604,7 +558,7 @@ Stated plainly, because a clean list of commands would otherwise be a lie.
   authors' fork ships a `finn-hlslib` that predates a fix every concat needs. The
   working combination is their fork **plus one `concat.hpp` from finn-dev**.
   build_notes §10.1–10.2; the fork and a sparse-checkout recipe are in
-  [References](#references-this-build-leans-on).
+  [References](#references).
 - **`BD 5-336` is unfixed upstream** and will hit every bitstream build. The
   harness that works around it (`ip_config_drone.tcl`, a consolidated IP
   repository, `run.sh`/`inner.sh`) lives outside this repo, in the FINN build
@@ -665,3 +619,55 @@ more instructive than the plan was.
   accuracy nor quantization, but **join scales, folding, and toolchain
   archaeology**. Phases 0–5 landed close to schedule. Everything expensive has
   been downstream of the QONNX handoff.
+
+---
+
+## References
+
+The FPGA path is not original work — it follows two published builds, and two
+FINN discussions supply numbers used in the resource budget.
+
+- **Danilowicz & Kryjak, ARC 2025** — branched YOLOv8n on ZCU102, W4A4, 320×192.
+  <https://arxiv.org/abs/2503.13023>. The topology in
+  `configs/yolov8n_p3_relu6.yaml` reproduces the live subgraph of their released
+  model, and their FINN fork is the one that compiles it.
+  Their fork: <https://github.com/mdanilow/finn> branch `yolov8_dev` — **read it,
+  don't clone it**; the substance is merged upstream. Sparse checkout, to avoid
+  pulling a full FINN history:
+
+  ```bash
+  git clone --depth 1 --branch yolov8_dev --filter=blob:none --no-checkout \
+      https://github.com/mdanilow/finn.git
+  cd finn && git sparse-checkout set notebooks/experiments && git checkout
+  ```
+
+  Useful files: `notebooks/experiments/yolov8/{build_yolov8.py,
+  final_hw_config_90fps.json,yolov8_output_dir/report/}`.
+- **Calì, Falaschetti & Biagetti, Electronics 2025, 14, 3993** — YOLOv3-Tiny on a
+  Zynq-7020, 208 FPS, 2.55 W. <https://doi.org/10.3390/electronics14203993>.
+  Source of the folding-balance method (§3.6.1) that `export/balance_folding.py`
+  implements, and of the ×2 BRAM rule used for portability estimates.
+  Code: <https://github.com/sn0wst0rm/FINN-VisDrone-YOLO> ·
+  thesis: <https://tesi.univpm.it/handle/20.500.12075/20897>
+- **LPYOLO** (Günay, Okcu, Bilge 2022) — the network the Electronics paper
+  reuses, and the model behind `configs/yolov5_pico.yaml`.
+  <https://github.com/sefaburakokcu/quantized-yolov5>
+- **FINN discussion 1021 — DSP packing in MVAU/VVU.**
+  <https://github.com/Xilinx/finn/discussions/1021>. Where the MAC-per-DSP
+  figures come from: RTL DSP48E2 packs 4 MACs at W4A4 and 2 at W8A8, HLS packs
+  none. This is why `MVAU_rtl` at W4 is a different cost class, not a tweak.
+- **FINN discussion 383 — FIFO depth between layers.**
+  <https://github.com/Xilinx/finn/discussions/383>. The over/under-sizing
+  tradeoff behind three failed bitfile builds.
+- **RTL ConvolutionInputGenerator** (`parallel_window`) —
+  <https://finn.readthedocs.io/en/latest/internals.html#rtl-convolutioninputgenerator>
+
+Toolchain homes: [FINN](https://github.com/Xilinx/finn) ·
+[Brevitas](https://github.com/Xilinx/brevitas) · [PYNQ](https://www.pynq.io) ·
+[YOLOv5 v7.0](https://github.com/ultralytics/yolov5) (vendored)
+
+### Not the primary path, but worth knowing
+
+- **Yu-Zhewen, Tiny YOLOv3 on Zynq** —
+  <https://github.com/Yu-Zhewen/Tiny_YOLO_v3_ZYNQ>. A different route to the same
+  destination: it does not go through FINN.
