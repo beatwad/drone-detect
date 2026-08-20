@@ -5,6 +5,9 @@ the box CENTRE is. This mirrors notebook cell 6b-2 (greedy one-to-one matching,
 conf >= CONF, IoU >= IOU_TP) so numbers are comparable to the ones already
 recorded for the float models.
 
+Loads both checkpoint families the project still has: plain Ultralytics `.pt` and
+the Brevitas QAT checkpoints from `qat/train_qat_v8.py`.
+
 n_TP is reported alongside: centre error is conditioned on matched detections, so
 a model that finds fewer drones is being scored on an easier subset. Compare the
 error only when n_TP is close.
@@ -18,12 +21,8 @@ import numpy as np
 import torch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'yolov5'))
 
-from models.common import DetectMultiBackend  # noqa: E402
-from utils.augmentations import letterbox  # noqa: E402
-from utils.general import non_max_suppression, scale_boxes  # noqa: E402
-from utils.torch_utils import select_device  # noqa: E402
+from ultralytics.utils.torch_utils import select_device  # noqa: E402
 
 CONF, IOU_NMS, IOU_TP = 0.5, 0.45, 0.50
 
@@ -54,31 +53,8 @@ def gt_boxes(img_path, w, h):
     return np.array(out) if out else np.zeros((0, 4))
 
 
-def load_any(weights, device):
-    """Return (model, stride) for either a float checkpoint or a QAT one.
-
-    QAT checkpoints hold a state_dict rather than a pickled model (Brevitas builds
-    its quantizer classes at runtime and they do not pickle), so `attempt_load`
-    inside DetectMultiBackend dies with KeyError: 'model'. Rebuild the quantized
-    graph at the recorded bit widths instead, mirroring qat/evaluate.py.
-    """
-    ck = torch.load(weights, map_location='cpu', weights_only=False)
-    if isinstance(ck, dict) and 'state_dict' in ck and 'weight_bits' in ck:
-        sys.path.insert(0, str(ROOT))
-        from qat.quantize import load_and_quantize  # noqa: E402
-        # Build and load on CPU, then move: Brevitas caches scale tensors as plain
-        # attributes, not buffers, so a .to() before load_state_dict strands them.
-        model, _ = load_and_quantize(ck['float_weights'], ck['weight_bits'],
-                                     ck['act_bits'], 'cpu')
-        model.load_state_dict(ck['state_dict'], strict=False)
-        model = model.to(device).eval()
-        return model, int(model.stride.max())
-    model = DetectMultiBackend(weights, device=device, fp16=False)
-    return model, int(model.stride)
-
-
 def checkpoint_kind(weights):
-    """'v8', 'v8_qat', or 'v5' — the three checkpoint families in this repo.
+    """'v8' or 'v8_qat' — the two checkpoint families in this repo.
 
     v8 pickles its graph as `ultralytics.nn.tasks.*`, an unambiguous marker.
     v8_qat (qat/train_qat_v8.py) carries a state_dict plus the bit widths, since
@@ -87,46 +63,30 @@ def checkpoint_kind(weights):
     ck = torch.load(weights, map_location='cpu', weights_only=False)
     if isinstance(ck, dict) and 'state_dict' in ck and 'low_bits' in ck:
         return 'v8_qat'
-    m = ck.get('model') if isinstance(ck, dict) else None
-    return 'v8' if type(m).__module__.startswith('ultralytics') else 'v5'
+    return 'v8'
 
 
 def predictor(weights, imgsz, device):
     """Return f(img_path, im0) -> xyxy boxes in ORIGINAL image pixels, conf>=CONF.
 
-    Both backends letterbox to `imgsz` and scale back, so the boxes the matcher
-    sees are defined identically and the two families stay comparable.
+    Ultralytics letterboxes to `imgsz` and scales back, so the boxes the matcher
+    sees are in source pixels regardless of the input geometry.
     """
-    kind = checkpoint_kind(weights)
-
-    if kind in ('v8', 'v8_qat'):
-        from ultralytics import YOLO
-        if kind == 'v8':
-            model = YOLO(weights)
-        else:
-            sys.path.insert(0, str(ROOT))
-            from qat.train_qat_v8 import load_qat_checkpoint  # noqa: E402
-            qm, ck = load_qat_checkpoint(weights, device)     # CPU-load, then move
-            model = YOLO(ck['float_weights'])                 # reuse its args/names
-            qm.args = model.model.args
-            model.model = qm
-
-        def predict(p, im0):
-            r = model.predict(p, imgsz=imgsz, conf=CONF, iou=IOU_NMS,
-                              device=device, max_det=300, verbose=False)[0]
-            return r.boxes.xyxy.cpu().numpy()
-        return predict
-
-    model, stride = load_any(weights, device)
+    from ultralytics import YOLO
+    if checkpoint_kind(weights) == 'v8':
+        model = YOLO(weights)
+    else:
+        sys.path.insert(0, str(ROOT))
+        from qat.train_qat_v8 import load_qat_checkpoint  # noqa: E402
+        qm, ck = load_qat_checkpoint(weights, device)     # CPU-load, then move
+        model = YOLO(ck['float_weights'])                 # reuse its args/names
+        qm.args = model.model.args
+        model.model = qm
 
     def predict(p, im0):
-        im = letterbox(im0, imgsz, stride=stride, auto=False)[0]
-        t = torch.from_numpy(im[:, :, ::-1].transpose(2, 0, 1).copy()).float().div(255)[None].to(device)
-        with torch.no_grad():
-            det = non_max_suppression(model(t), CONF, IOU_NMS, max_det=300)[0]
-        if len(det):
-            det[:, :4] = scale_boxes(t.shape[2:], det[:, :4], im0.shape).round()
-        return det[:, :4].cpu().numpy() if len(det) else np.zeros((0, 4))
+        r = model.predict(p, imgsz=imgsz, conf=CONF, iou=IOU_NMS,
+                          device=device, max_det=300, verbose=False)[0]
+        return r.boxes.xyxy.cpu().numpy()
     return predict
 
 

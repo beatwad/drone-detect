@@ -21,7 +21,7 @@ yolov8n-P3 (float, ReLU6)  →  Brevitas QAT (W4A4)  →  QONNX  →  FINN  → 
 | 0 | Scaffolding | done |
 | 1 | Dataset acquisition + merge | done — 36,903 images |
 | 2 | Augmentation (close-range framing) | done, in-loop via hyp |
-| 3 | Float training — gate mAP50 > 0.85 | done — **0.963** (v5n), **0.988** close (v8n-P3) |
+| 3 | Float training — gate mAP50 > 0.85 | done — **0.988** close, **0.993** mid |
 | 4 | Brevitas QAT | done — W8A8 free, W4A4 costs ~1 pt |
 | 5 | QONNX export | done, both gates pass |
 | 5b–5c | FINN build → bitstream | done — 30.0% LUT, 75.8% BRAM, timing closed |
@@ -29,9 +29,10 @@ yolov8n-P3 (float, ReLU6)  →  Brevitas QAT (W4A4)  →  QONNX  →  FINN  → 
 | 8 | Board bring-up, host side | done — driver, verification, Linux image |
 | 9 | **Board bring-up, hardware** | **blocked: board not here** |
 
-The network that actually ships is **yolov8n-P3 ReLU6 at W4A4, 192×320**, not the
-YOLOv5n the project started with. The v5n line is still here and still works; it
-is the historical baseline and the source of most of the dataset tooling.
+The network that ships is **yolov8n-P3 ReLU6 at W4A4, 192×320**. The project
+started on YOLOv5n and that line was removed once it stopped being used; the
+dataset tooling it produced is still the tooling in `scripts/`, and the history
+is in git.
 
 ## Where the documentation lives
 
@@ -67,9 +68,13 @@ Pinned versions that matter as a set: **torch 2.4.1+cu121, brevitas 0.13.0,
 qonnx 1.0.0, onnx 1.22, ultralytics 8.3.253, numpy <2**. Brevitas/QONNX/FINN are
 version-sensitive as a trio.
 
-YOLOv5 v7.0 is **vendored** at [yolov5/](yolov5/) (pin in
-[yolov5/VENDORED_PIN.txt](yolov5/VENDORED_PIN.txt)) — do not `pip install yolov5`
-or swap in master, which pulls the anchor-free rewrite.
+**The model code is the `ultralytics` package, not vendored.** Nothing in this
+repo carries a copy of YOLO; `configs/yolov8n_p3_relu6.yaml` describes the
+topology and Ultralytics builds it. That makes the pin load-bearing: quantization
+hooks in `qat/quantize_v8.py` attach to `C2f` and `Detect` internals, and those
+move between releases — `non_max_suppression` already migrated from
+`ultralytics.utils.ops` to `ultralytics.utils.nms` inside the 8.3 line. Rebuild
+through `uv sync`, and re-run the export gates after any bump.
 
 Kaggle downloads need credentials at `~/.kaggle/kaggle.json` (manual step).
 
@@ -136,7 +141,7 @@ sky, where pHash is near-degenerate and unrelated images collide at Hamming 0–
 It writes a CSV of every candidate for review.
 
 `drop_tiny_boxes.py` removes an image only when *every* box in it is sub-12px —
-below YOLOv5's P3/stride-8 floor, so unreachable (measured miss rate 33% at 8–12px
+below the P3/stride-8 detection floor, so unreachable (measured miss rate 33% at 8–12px
 vs 2.5% above 64px). Frames mixing a resolvable box with a tiny one are left alone:
 stripping a box while its drone stays in frame teaches the model that a drone is
 background. Empty frames are kept — they are negatives, not long-range targets.
@@ -182,14 +187,11 @@ applied" before adding a source.
 
 ## 3. Train the float model
 
-Two lines exist. **yolov8n-P3 is what ships**; YOLOv5n is the historical baseline
-and the reason most of the dataset tooling exists.
+> **SiLU→ReLU is NOT swapped after training.** Train in ReLU6 from the start —
+> see §4. The older instruction to "keep stock SiLU here" was measured to be
+> wrong: pasting ReLU into SiLU-trained weights took mAP50 from 0.963 to 0.078.
 
-> **SiLU→ReLU is NOT swapped after training.** Train in ReLU (or ReLU6) from the
-> start — see §4. The older instruction to "keep stock SiLU here" was measured to
-> be wrong and has been removed.
-
-### 3.1 yolov8n-P3 ReLU6 — the network that ships
+### 3.1 The network, and how to train it
 
 The topology is the live subgraph of the reference build: yolov8n layers 0–15
 plus one stride-8 head, reproduced one-to-one in
@@ -209,50 +211,37 @@ uv run yolo detect train \
 ```
 
 Result (`runs/train/v8n_p3_relu62`): close **0.9855** / mid **0.9893** /
-long 0.8691. Beats the YOLOv5n-eighth variant on centre error *and* recall.
+long 0.8691 — better on centre error *and* recall than any YOLOv5n variant
+tried before it.
 
 **Disable Ultralytics' Conv+BN fusion** before quantizing — build_notes §10.13.
 
-### 3.2 YOLOv5n — the baseline
+### 3.2 The notebook
 
-Primary interface is the notebook (run control, live metrics, per-regime eval,
-prediction visualization):
+The notebook is the primary interface — run control, live metrics, per-regime
+eval, IoU and centre-error cells, false-alarm rate, prediction visualization. It
+drives the same Ultralytics trainer as the CLI above:
 
 ```bash
 uv run jupyter lab      # then open training/train_baseline.ipynb
 ```
 
-The equivalent CLI, matching the best run:
+Set the run in the `CFG` cell and execute the launch cell; interrupting the
+kernel stops training and keeps the best checkpoint so far. `CFG['model_cfg']`
+selects the topology — `configs/yolov8n_p3_relu6.yaml` is the compiled one.
 
-```bash
-uv run python yolov5/train.py \
-  --weights weights/yolov5n.pt \
-  --data configs/drone.yaml \
-  --hyp configs/hyp_gen_relu_more_data_5.yaml \
-  --epochs 100 --batch-size 192 --imgsz 640 \
-  --device 0 --workers 12 --patience 30 --seed 0 \
-  --project runs/train --name relu_more_data_5
-```
+**Batch scaling.** Ultralytics pins its optimizer math to a nominal batch
+`nbs = 64`: it scales `weight_decay` by the batch multiplier but never touches
+`lr0`. So for `batch = 64*m` the notebook pre-adjusts `lr0 *= m` and
+`weight_decay /= m` (`derive_hyp`), keeping the training regime constant as batch
+changes. Passing a hand-written `lr0` at a non-64 batch means doing this
+yourself. The shipping run used `m = 3` → batch 192, `lr0` 0.03.
 
-`weights/yolov5n.pt` is the **COCO-pretrained initialization**, not a drone
-model. Use `configs/yolov5n_relu.yaml` for the ReLU variant that QAT consumes.
-
-**Batch scaling gotcha.** The `configs/hyp_gen_*.yaml` files are *generated* by
-the notebook. YOLOv5 pins its optimizer math to `nbs=64`, scales `weight_decay`
-by the batch multiplier, and never touches `lr0`. So for `batch = 64*m` the
-notebook pre-adjusts `lr0 *= m` and `weight_decay /= m`, keeping the training
-regime constant. Writing a hyp file by hand at a non-64 batch means doing this
-yourself. The current run used `m = 3` → batch 192, `lr0` 0.03.
-
-**Augmentation.** Close-range framing comes from in-loop augmentation
-(`scale: 0.5`, `translate: 0.1`, `fliplr: 0.5`), not an offline pass — there is
-no augmented dataset on disk. Note `mosaic: 0.5` rather than the stock 1.0:
-mosaic at 1.0 costs ~12 points of empty-frame false-alarm rate, and the damage is
-**invisible to val mAP**. Don't raise it without checking the false-alarm cell.
-
-YOLOv5 shares one class-level `Conv.default_act` instance across all Conv layers,
-so `model.modules()` reports a single activation — swapping means rebinding
-`Conv.default_act` before instantiation, not replacing per-layer objects.
+**Augmentation.** Close-range framing comes from in-loop augmentation, not an
+offline pass — there is no augmented dataset on disk. Note `mosaic: 0.5` rather
+than the stock 1.0: mosaic at 1.0 costs ~12 points of empty-frame false-alarm
+rate, and the damage is **invisible to val mAP**. Don't raise it without checking
+the false-alarm cell.
 
 ### Evaluation
 
@@ -261,13 +250,17 @@ pixels and as a fraction of image diagonal, and false positives per regime.
 `empty` has no ground truth and is scored as a background false-alarm rate.
 
 ```bash
-uv run python yolov5/val.py \
-  --weights runs/train/relu_more_data_5/weights/best.pt \
-  --data configs/drone_val_close.yaml --imgsz 640 --device 0
+uv run yolo detect val model=runs/train/v8n_p3_relu62/weights/best.pt \
+  data=configs/drone_val_close.yaml imgsz=320 device=0
 
 uv run python scripts/center_error.py \
-  --weights runs/train/relu_more_data_5/weights/best.pt --regimes close mid long
+  --weights runs/train/v8n_p3_relu62/weights/best.pt --regimes close,mid,long
 ```
+
+`center_error.py` loads both checkpoint families — plain Ultralytics `.pt` and
+the Brevitas QAT checkpoints — so float and quantized models are scored by
+identical code. Its `--imgsz` accepts `'H,W'`, which is the only way to score at
+the non-square shape the bitstream runs (`--imgsz 192,320`).
 
 > **Never compare mAP across runs built on different val sets.** The dataset
 > changed repeatedly during development; older numbers in `runs/` are not
@@ -277,10 +270,9 @@ uv run python scripts/center_error.py \
 
 | Path | What |
 |---|---|
-| `weights/yolov5n.pt`, `weights/yolov8n.pt` | COCO-pretrained inits. **Not drone detectors.** |
+| `weights/yolov8n.pt` | COCO-pretrained init. **Not a drone detector.** |
 | `runs/train/v8n_p3_relu62/weights/best.pt` | **the float model that ships** |
 | `runs/qat/v8n_p3_w4a4/weights/best.pt` | **the quantized model that ships** |
-| `runs/train/relu_more_data_5/weights/best.pt` | YOLOv5n ReLU baseline, mAP50 0.963 |
 
 ---
 
@@ -308,13 +300,10 @@ Three things here are load-bearing and none is obvious.
 Post-training calibration alone scores mAP50 **0.9628** vs float 0.9629. The
 fine-tune budget only earns its keep at 4-bit, where PTQ collapses (0.197).
 
-```bash
-uv run python qat/ptq_baseline.py          # calibrate-only baseline — YOLOv5 line only
-```
-
-`ptq_baseline.py` and `qat/evaluate.py` belong to the **YOLOv5** line: both import
-the vendored yolov5's `val` and rebuild the graph through `qat/quantize.py`. They
-cannot load a v8 checkpoint.
+That was measured on the YOLOv5n line, whose calibrate-only script is gone with
+it; on the v8 line the same holds — W8A8 needed no recovery, W4A4 did. Set the
+widths with `--low-bits` / `--high-bits` below and skip the fine-tune to
+reproduce it.
 
 ### W4A4, the configuration that ships
 
@@ -348,8 +337,6 @@ uv run python scripts/center_error.py \
 > **Judge quantization by centre error, not mAP50-95.** The number that reaches
 > the aiming subsystem is where the box centre lands. mAP50-95 moves for reasons
 > that never touch aim.
-
-The YOLOv5n equivalents are `qat/quantize.py` / `qat/train_qat.py`.
 
 ---
 
@@ -521,40 +508,30 @@ step left in the chain.
 
 ## 10. Run a model on a webcam stream
 
-The vendored `detect.py` handles webcams natively — a numeric `--source` selects a
-device index and routes through the threaded `LoadStreams` reader.
+Ultralytics' predictor takes a camera index directly:
 
 ```bash
-uv run python yolov5/detect.py \
-  --weights runs/train/relu_more_data_5/weights/best.pt \
-  --source 0 \
-  --imgsz 640 \
-  --conf-thres 0.25 \
-  --device 0 \
-  --view-img --nosave
+uv run yolo predict \
+  model=runs/train/v8n_p3_relu62/weights/best.pt \
+  source=0 imgsz=320 conf=0.25 device=0 show=True \
+  project=runs/predict
 ```
 
-- `--source 0` — camera index; matches `/dev/video0`. Check what's attached with
-  `ls /dev/video*` (a UVC camera usually claims two nodes — use the lower index).
-  `v4l2-ctl --list-devices` gives more detail if you install `v4l-utils`.
-- `--view-img` — live annotated preview window. Needs a display; drop it over SSH.
-- `--nosave` — don't write frames out. Omit to record the session; note `detect.py`
-  defaults its output to `yolov5/runs/detect/`, so pass `--project runs/detect` to
-  keep it out of the vendored tree.
-- `--vid-stride 2` — process every Nth frame if you want headroom.
-- `--conf-thres` — raise it to cut false positives at some recall cost.
-
-Other sources work through the same flag: a file path, a directory, a glob, an RTSP
-or HTTP URL, or `screen` for a screen grab.
+- `source=0` — camera index, matching `/dev/video0`. Check what is attached with
+  `ls /dev/video*`; a UVC camera usually claims two nodes, use the lower index.
+  `v4l2-ctl --list-devices` gives more detail.
+- `show=True` — live annotated window. Needs a display; drop it over SSH.
+- `save=False` — don't write frames out. Other sources work through the same
+  flag: a file, a directory, a glob, or an RTSP/HTTP URL.
 
 ### Caveat: this is a demo harness
 
-`detect.py` is per-frame and stateless — NMS, annotate, display. It answers *"does
-the model see the drone through my camera"*, and nothing more. The tracking logic 
-sketched in [TODO.md](TODO.md) — seed-box selection nearest screen center, 
-IoU cluster gathering, weighted box fusion, Kalman predict/update with a miss
-counter and re-seeding, then a hysteresis + debounce gate producing the center offset
-and a `close_enough` flag — **is not implemented anywhere yet.** It needs a separate
+`predict` is per-frame and stateless — NMS, annotate, display. It answers *"does
+the model see the drone through my camera"*, and nothing more. The tracking logic
+sketched in [TODO.md](TODO.md) — seed-box selection nearest screen centre, IoU
+cluster gathering, weighted box fusion, Kalman predict/update with a miss counter
+and re-seeding, then a hysteresis + debounce gate producing the centre offset and
+a `close_enough` flag — **is not implemented anywhere yet.** It needs a separate
 script working off the pre-NMS boxes.
 
 ---
@@ -591,13 +568,15 @@ data/          raw sources + merged set + manifest.csv          (gitignored)
 deploy/        postprocess.py, run_on_board.py, dequant constants
   petalinux/   the board's Linux image: Dockerfile, configure.sh, dtsi, mksd.sh
 export/        QONNX export, verification gates, FINN driver + folding search
-qat/           Brevitas QAT — quantize/train/evaluate, v5 and v8 variants
+qat/           Brevitas QAT — quantize_v8.py builds the graph, train_qat_v8.py fine-tunes
 runs/          training runs + checkpoints                      (gitignored)
 scripts/       dataset merge + cleaning, centre-error metrics
 training/      train_baseline.ipynb — float training & evaluation
 weights/       COCO-pretrained initialisations                  (gitignored)
-yolov5/        vendored ultralytics/yolov5 v7.0 @ 915bbf2, locally patched
 ```
+
+The model code itself is the `ultralytics` package in `.venv/`; nothing is
+vendored.
 
 ## Conventions
 
@@ -660,8 +639,7 @@ FINN discussions supply numbers used in the resource budget.
   Code: <https://github.com/sn0wst0rm/FINN-VisDrone-YOLO> ·
   thesis: <https://tesi.univpm.it/handle/20.500.12075/20897>
 - **LPYOLO** (Günay, Okcu, Bilge 2022) — the network the Electronics paper
-  reuses, and the model behind `configs/yolov5_pico.yaml`.
-  <https://github.com/sefaburakokcu/quantized-yolov5>
+  reuses. <https://github.com/sefaburakokcu/quantized-yolov5>
 - **FINN discussion 1021 — DSP packing in MVAU/VVU.**
   <https://github.com/Xilinx/finn/discussions/1021>. Where the MAC-per-DSP
   figures come from: RTL DSP48E2 packs 4 MACs at W4A4 and 2 at W8A8, HLS packs
@@ -674,7 +652,7 @@ FINN discussions supply numbers used in the resource budget.
 
 Toolchain homes: [FINN](https://github.com/Xilinx/finn) ·
 [Brevitas](https://github.com/Xilinx/brevitas) · [PYNQ](https://www.pynq.io) ·
-[YOLOv5 v7.0](https://github.com/ultralytics/yolov5) (vendored)
+[Ultralytics](https://github.com/ultralytics/ultralytics)
 
 ### Not the primary path, but worth knowing
 

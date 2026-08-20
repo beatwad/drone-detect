@@ -26,12 +26,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from scripts.center_error import CONF, IOU_NMS, IOU_TP, iou_matrix, gt_boxes  # noqa: E402
-
-# center_error puts the vendored yolov5 first on sys.path, and yolov5 ships its
-# own export.py — which shadows this repo's `export` package. Put ROOT back in
-# front before importing from it.
-sys.path.insert(0, str(ROOT))
-
 from deploy.postprocess import decode, nms            # noqa: E402
 from export.verify_qonnx_v8 import letterbox          # noqa: E402
 

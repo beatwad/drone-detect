@@ -12,7 +12,7 @@ Full source docs live in [.claude/docs/](.claude/docs/):
   running a FINN build; it is where all the hard-won toolchain detail lives.
 
 ## Pipeline (target)
-`YOLOv5n (float)` → `Brevitas QAT (INT8, SiLU→ReLU)` → `QONNX export` →
+`yolov8n-P3 (float, ReLU6)` → `Brevitas QAT (W4A4)` → `QONNX export` →
 `FINN → bitstream` → `PYNQ deployment`. Everything up to and including QONNX
 export is **board-agnostic** and done on the host GPU.
 
@@ -75,7 +75,8 @@ Key facts, all detailed in [build_notes.md](.claude/docs/build_notes.md):
 1. Dataset acquisition + merge — **DONE** (see `scripts/merge_dataset.py`,
    `configs/drone.yaml`, `data/drone/` + `manifest.csv`)
 2. Augmentation (close-range framing) — **DONE** (in-loop via hyp; `mosaic: 0.5`)
-3. Float training YOLOv5n — gate mAP50 > 0.85 — **DONE**, mAP50 **0.963**
+3. Float training — gate mAP50 > 0.85 — **DONE**, mAP50 **0.963** on the
+   YOLOv5n line (since removed, see below); superseded by phase 7. Historical:
    (`runs/train/more_data_5`, SiLU) and **0.963** (`relu_more_data_5`, ReLU)
 4. Brevitas QAT — **DONE** (`qat/`): **INT8 needs no fine-tuning at all**
    (W8A8 PTQ mAP50 0.9628 vs float 0.9629). 4-bit weights collapse under PTQ
@@ -116,12 +117,14 @@ Key facts, all detailed in [build_notes.md](.claude/docs/build_notes.md):
    write the card with `deploy/petalinux/mksd.sh`, boot, then run
    `run_on_board.py`. After that: real FPS and power under load.
 
-6. `configs/yolov5_pico.yaml` — branch-free, single-scale, 357k-param net. Float
-   close mAP50 **0.975** vs yolov5n's 0.989; long range 0.778 vs 0.904. Not yet
-   quantized. Sized for a Z7020 budget, so ~10% of a ZCU102. **Its rationale is
-   now largely void**: it was insurance against the branch blocker, and branches
-   compile. `configs/yolov5n_eighth.yaml` (446k params, full FPN, multi-scale)
-   beats it on every regime and was explicitly conditional on this question.
+6. **The whole YOLOv5 line was removed 2026-08-20** — vendored `yolov5/`, its
+   QAT and export scripts, and the `pico` / `n_eighth` / `relu` configs. It had
+   not been used since the retarget to yolov8n-P3 (phase 7), and its rationale
+   was already void: pico existed as insurance against the "FINN cannot compile
+   branches" blocker, which was refuted. Everything it measured is recorded here
+   and in build_notes; the code is in git history. `scripts/center_error.py` was
+   ported off it first, and re-measured **identical to the last digit** on the
+   shipping checkpoint (close 13.264 px / mid 6.908 / long 2.684, same n_TP).
 
 ## Open questions (settle these before more model work)
 1. **Deployment optics = lens FOV × crop.** Much less demanding than the earlier
@@ -134,8 +137,8 @@ Key facts, all detailed in [build_notes.md](.claude/docs/build_notes.md):
      full frame: at 60° that gives ~12 px, at/below the detection floor.
    - **A 416 crop beats a 640 crop.** Smaller crop = narrower effective FOV =
      larger target fraction (at 45° full FOV: 1.55% at 416 vs 0.66% at 640).
-     Smaller input is better here, and it suits pico's **stride-32** single head,
-     which needs targets well above 32 px.
+     Smaller input is better here, and it suits a single low-stride head, which
+     needs targets comfortably above its stride.
    - Prefer **camera-side ROI** to a host-side crop: ~2.6× faster sensor readout
      (416 vs 1080 rows), 12× less USB traffic (173 KB vs 2.07 MB), zero CPU work.
      Cost: the window is fixed. A *steerable* crop (centred on the Kalman
@@ -150,17 +153,21 @@ Key facts, all detailed in [build_notes.md](.claude/docs/build_notes.md):
      collect a few hundred real frames before trusting the numbers.
    - Bonus: a centre crop is boresight-aligned, so the centre offset the aiming
      subsystem consumes needs no coordinate transform.
-2. **What does pico cost once quantized?** Float close mAP50 is 0.975; W4A4 and
-   W4A8 are unmeasured. ~1 h — the existing `qat/` pipeline runs on pico
-   unchanged. Closes the last accuracy unknown on the FINN path. Expect
-   ~0.96–0.97 by analogy with yolov5n (INT8 free; W4A8 cost close range 0.5 pt).
+2. ~~**What does pico cost once quantized?**~~ **CLOSED 2026-08-20, not by
+   measurement but by removal.** pico was a YOLOv5 config and went with that
+   line. It was insurance against a blocker that turned out not to exist, and
+   yolov8n-P3 W4A4 is measured, built and better on every regime. Reopening it
+   would mean restoring the line from git history.
 
 ## Locked decisions
-- **YOLOv5 source:** classic `ultralytics/yolov5` **v7.0**, vendored at
-  [yolov5/](yolov5/) (pin: commit `915bbf2`, see `yolov5/VENDORED_PIN.txt`).
-  NOT master (which pulls in the `ultralytics` pkg + anchor-free code) and NOT
-  the pip package. Rationale: matches the brief's anchor-based/C3 assumptions,
-  keeps QAT graph surgery tractable, has known Brevitas/FINN precedent.
+- **Model source: the `ultralytics` package, pinned, nothing vendored.**
+  (Was: classic `ultralytics/yolov5` v7.0 vendored at `yolov5/`. That served the
+  anchor-based YOLOv5n line and was removed with it, 2026-08-20.) The topology
+  lives in `configs/yolov8n_p3_relu6.yaml` and Ultralytics builds it. **The pin
+  is load-bearing:** `qat/quantize_v8.py` hooks `C2f` and `Detect` internals,
+  which move between releases — `non_max_suppression` already migrated from
+  `ultralytics.utils.ops` to `ultralytics.utils.nms` inside the 8.3 line. After
+  any version bump, re-run the export gates before trusting a build.
 - **SiLU→ReLU swap timing: REVISED — train float in ReLU from the start.**
   (Was: "swap at the QAT stage, not before float training." Measurement
   contradicted it.) A retrained ReLU model costs 2.1 pt mAP50-95 and **zero**
@@ -168,7 +175,8 @@ Key facts, all detailed in [build_notes.md](.claude/docs/build_notes.md):
   destroys the model — mAP50 0.963 → **0.078**, close range → 0.0007 — because
   ~49% of pre-activations are negative and ReLU zeroes them across 57 layers.
   So QAT must start from `runs/train/relu_more_data_5/weights/best.pt`, never
-  from the SiLU model. Use `configs/yolov5n_relu.yaml` (`activation: nn.ReLU()`).
+  from the SiLU model. For the shipping net this is settled by construction:
+  `configs/yolov8n_p3_relu6.yaml` trains in ReLU6 from scratch.
 - **Devkit (DEVELOPMENT ONLY):** **ZCU102** (XCZU9EG-2FFVB1156), chosen
   2026-08-03. 274,080 LUT / 32.1 Mbit BRAM (912×36Kb, **no URAM**) / 2,520
   DSP48E2; PS = 4× Cortex-A53 @1.2 GHz + 2× Cortex-R5F @500 MHz; 2× FMC HPC and
@@ -247,7 +255,7 @@ Key facts, all detailed in [build_notes.md](.claude/docs/build_notes.md):
   `check_join_scales.py` `finn_transforms.py` `finn_build.py`
   `balance_folding.py` `verify_qonnx_v8.py` `verify_finn_steps.py`),
   `deploy/` (`postprocess.py` `run_on_board.py` + `petalinux/` — the board's
-  Linux image), `yolov5/` (vendored).
+  Linux image). No vendored model code — `ultralytics` comes from `.venv/`.
   `data/` + `runs/` are gitignored.
 
 ## Gotchas / notes
