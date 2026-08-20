@@ -28,7 +28,7 @@ yolov8n-P3 (float, ReLU6)  →  Brevitas QAT (W4A4)  →  QONNX  →  FINN  → 
 | 7 | Retarget to drones (yolov8n-P3) | done |
 | 8 | Board bring-up, host side | done — driver, verification, Linux image |
 | 9 | **Board bring-up, hardware** | **blocked: board not here** |
-| 10 | Tracking + aim output (§11) | **not started** — spec only |
+| 10 | Tracking + aim output (§11) | code exists, **never run on real data** |
 
 The network that ships is **yolov8n-P3 ReLU6 at W4A4, 192×320**. The project
 started on YOLOv5n and that line was removed once it stopped being used; the
@@ -533,15 +533,43 @@ turns detections into an aim command is specified in §11 and **not implemented*
 
 ---
 
-## 11. Tracking and aim output — NOT IMPLEMENTED
+## 11. Tracking and aim output
 
-This is the last piece of the pipeline and none of it exists yet: no script, no
-tests, no measurements. It is specified here so the spec lives with everything
-else rather than in a stray file.
+[deploy/track.py](deploy/track.py) — `AimTracker`, one instance per camera,
+`update()` once per frame.
+
+**What is and is not done.** The algorithm is written and exercised on synthetic
+tracks: it converges on a crossing target, holds state through a detection
+dropout, rejects a teleporting outlier and re-seeds after `MISS_LIMIT`, holds the
+centring flag inside the hysteresis band and drops it on a slow drift past
+`D_high`. It has **never seen a real detection**, never run on the board, and
+**every threshold in it is a guess** — no footage exists through the real lens
+yet, and the centring gate depends on the aiming subsystem's tolerance, which is
+not specified. Treat the numbers as placeholders.
 
 It consumes the **pre-NMS** boxes — `deploy/postprocess.decode()` output, before
 `nms()` — and emits two things for the aiming subsystem: the centre offset, and a
 `close_enough` flag.
+
+Usage:
+
+```python
+from deploy.postprocess import dequantize, decode
+from deploy.track import AimTracker
+
+tracker = AimTracker(frame_wh=(320, 192))
+...
+feat = dequantize(raw_nhwc, scale, bias)
+boxes, conf = decode(feat)                 # PRE-NMS
+aim = tracker.update(boxes[0], conf[0, :, 0], dt)
+if aim.close_enough:
+    dx, dy = aim.offset                    # pixels from frame centre
+```
+
+`dt` is seconds since the previous frame's **exposure**, and is passed in rather
+than measured inside: the filter has to advance from when the photons landed, not
+from when the frame reached userspace. That is the same argument as the camera
+trigger, and until there is one, `dt` is only as good as the timestamp available.
 
 ```
 1. Seed box      of the pre-NMS boxes, keep conf > thresh_conf;
@@ -572,6 +600,14 @@ Notes that are not in the sketch but follow from decisions already made:
 - **Single target by construction.** The seed-and-cluster structure resolves one
   object, deliberately: the system aims at one drone. Full NMS is not required —
   the cluster step already collapses duplicates around the seed.
+- **Alpha-beta, not a full Kalman.** A fixed-gain filter is what a
+  constant-velocity Kalman converges to, without covariance bookkeeping. The gate
+  needs a predicted *box*, so size is carried too — as a plain EMA, since size has
+  no useful dynamics here. Replace this first if measurement noise ever needs
+  estimating rather than assuming.
+- **Distances are fractions of the frame diagonal**, not pixels — the unit aim
+  error is already reported in (`scripts/center_error.py`, 0.0139 for the
+  shipping model), so `D_low` / `D_high` can be read against existing numbers.
 - **Runs on the A53s under Linux — for the baseline only.** Nothing above needs
   the fabric: the tracking itself is ~10k operations per frame, microseconds
   either way. The point of the baseline is to prove the pipeline end to end, and
@@ -622,7 +658,7 @@ Stated plainly, because a clean list of commands would otherwise be a lie.
 .claude/docs/  build_notes.md — the measured record behind every decision
 configs/       dataset yamls, per-regime val subsets, model yamls, generated hyps
 data/          raw sources + merged set + manifest.csv          (gitignored)
-deploy/        postprocess.py, run_on_board.py, dequant constants
+deploy/        postprocess.py, track.py, run_on_board.py, dequant constants
   petalinux/   the board's Linux image: Dockerfile, configure.sh, dtsi, mksd.sh
 export/        QONNX export, verification gates, FINN driver + folding search
 qat/           Brevitas QAT — quantize_v8.py builds the graph, train_qat_v8.py fine-tunes

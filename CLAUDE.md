@@ -224,7 +224,10 @@ Key facts, all detailed in [build_notes.md](.claude/docs/build_notes.md):
   Record the footprint of anything we train so we know what ports.
 - **Post-processing runs on the A53s for now — decided 2026-08-20.** The tracking
   and aim-output flow (README §11: seed, IoU cluster, WBF, Kalman, centring gate)
-  goes in Python/C on Linux, next to the capture and the driver. Rationale: the
+  is implemented in `deploy/track.py` and runs on Linux, next to the capture and
+  the driver. Exercised on synthetic tracks only — **never on a real detection**,
+  and every threshold in it is a placeholder awaiting footage through the real
+  lens (open question 1). Rationale: the
   task is a **baseline** — prove the chain end to end — and the arithmetic is
   ~10k operations per frame, microseconds on anything. R5F was considered and
   dropped: it buys determinism but costs an OpenAMP/RPMsg hop and a second
