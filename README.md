@@ -309,8 +309,12 @@ Post-training calibration alone scores mAP50 **0.9628** vs float 0.9629. The
 fine-tune budget only earns its keep at 4-bit, where PTQ collapses (0.197).
 
 ```bash
-uv run python qat/ptq_baseline.py          # calibrate-only baseline
+uv run python qat/ptq_baseline.py          # calibrate-only baseline — YOLOv5 line only
 ```
+
+`ptq_baseline.py` and `qat/evaluate.py` belong to the **YOLOv5** line: both import
+the vendored yolov5's `val` and rebuild the graph through `qat/quantize.py`. They
+cannot load a v8 checkpoint.
 
 ### W4A4, the configuration that ships
 
@@ -331,8 +335,14 @@ from 104% to 4.6%). See build_notes §10.7.
 Result: `runs/qat/v8n_p3_w4a4/weights/best.pt` — close 0.9835 / mid 0.9879 /
 long 0.8514, centre error unchanged at 0.0139.
 
+The v8 line evaluates through **Ultralytics' own validator, inside the trainer**
+(`train_qat_v8.py` runs it at the end and writes `runs/qat/<name>/results.csv`).
+For the number that actually matters — where the box centre lands — use the aim
+metric, which loads all three checkpoint families (`v5`, `v8`, `v8_qat`):
+
 ```bash
-uv run python qat/evaluate.py --ckpt runs/qat/v8n_p3_w4a4/weights/best.pt --imgsz 320
+uv run python scripts/center_error.py \
+  --weights runs/qat/v8n_p3_w4a4/weights/best.pt --regimes close,mid,long
 ```
 
 > **Judge quantization by centre error, not mAP50-95.** The number that reaches
