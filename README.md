@@ -572,9 +572,20 @@ Notes that are not in the sketch but follow from decisions already made:
 - **Single target by construction.** The seed-and-cluster structure resolves one
   object, deliberately: the system aims at one drone. Full NMS is not required —
   the cluster step already collapses duplicates around the seed.
-- **Where it runs is undecided.** Nothing above needs the fabric; it is a few
-  hundred operations per frame. The current plan is the R5F cores, with a move
-  into PL only if it lands alongside a MIPI camera. See CLAUDE.md.
+- **Runs on the A53s under Linux — for the baseline only.** Nothing above needs
+  the fabric: the tracking itself is ~10k operations per frame, microseconds
+  either way. The point of the baseline is to prove the pipeline end to end, and
+  Linux on the A53s is where the capture and the driver already live, so that is
+  the shortest path. **This is explicitly temporary.** Full determinism needs the
+  whole chain — preprocessing, decode, tracker — in PL, fed by a MIPI camera
+  straight into the fabric, with no Linux scheduler between exposure and aim
+  command. Until then, scheduler jitter lands directly in aim error.
+- **Order the decode to avoid the softmax.** A naive implementation dequantizes
+  everything and runs DFL over all 960 cells: 960 x 4 x 16 = **61,440 `exp`
+  calls**. Instead dequantize the class channel only, threshold in *logit* space
+  (`conf > 0.25` is `logit > -1.0986`, so no sigmoid at all), and run DFL only on
+  the survivors — of order 1,000 `exp` calls. This is an operation count, not a
+  measurement; the constant depends on the libm.
 - **Parameters unset.** `thresh_conf`, `thresh_iou`, `thresh_frame_iou`, `M`,
   `D_low`, `D_high`, `N` all need measuring against real footage, which needs the
   camera and the lens — open question 1.

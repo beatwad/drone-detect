@@ -222,6 +222,19 @@ Key facts, all detailed in [build_notes.md](.claude/docs/build_notes.md):
   - **7–23 Mbit** → needs a K26-class part (yolov5n@416 W4A8 = 21 Mbit)
   - **> 23 Mbit** → ZU7EV/ZU9EG only, i.e. it does not ship
   Record the footprint of anything we train so we know what ports.
+- **Post-processing runs on the A53s for now — decided 2026-08-20.** The tracking
+  and aim-output flow (README §11: seed, IoU cluster, WBF, Kalman, centring gate)
+  goes in Python/C on Linux, next to the capture and the driver. Rationale: the
+  task is a **baseline** — prove the chain end to end — and the arithmetic is
+  ~10k operations per frame, microseconds on anything. R5F was considered and
+  dropped: it buys determinism but costs an OpenAMP/RPMsg hop and a second
+  firmware to maintain, which is not what a baseline needs.
+  **This is temporary and known to be wrong for deployment.** The endpoint is the
+  whole chain in PL — preprocessing, decode, tracker — fed by MIPI straight into
+  the fabric, so nothing between exposure and aim command is scheduled by Linux.
+  Every millisecond of scheduler jitter lands directly in aim error, exactly like
+  the missing camera trigger. Do not let baseline code assume a Linux-shaped
+  world any more than it must.
 - **Power shape:** on the measured Z7020 reference, **1.9 W of 2.55 W total was
   PS + DDR idle**; the fabric drew only 0.22–0.65 W. PS involvement, not fabric
   size, dominates the power budget. So the full-fabric architecture that
