@@ -1,0 +1,399 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 1180" width="960" height="1180"
+     font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11">
+  <title>YOLOv8n-P3 — dataflow and join map</title>
+  <desc>The yolov8n-P3 ReLU6 network as it is actually built on the ZCU102: backbone layers 0-9,
+  the top-down FPN 10-15, and one legacy stride-8 Detect head at 192x320 input. The bottom-up PAN
+  and the P4/P5 heads are pruned. All 16 join nodes (10 Concat, 6 Add) are marked, together with the
+  C2f, SPPF and Detect internals where 14 of them live.</desc>
+
+  <style>
+    .paper { fill: #f2f5f7; }
+    .card  { fill: #fbfcfd; stroke: #2f6d8a; stroke-width: 1; }
+    .dead  { fill: none; stroke: #5d6b78; stroke-width: 1; stroke-dasharray: 4 3; }
+    .ink   { fill: #0f171e; }
+    .muted { fill: #5d6b78; }
+    .jfill { fill: #b23a2f; }
+    .ffill { fill: #7a6a2f; }
+    .wire  { stroke: #2f6d8a; stroke-width: 1.6; fill: none; }
+    .jwire { stroke: #b23a2f; stroke-width: 1.6; fill: none; }
+    .rule  { stroke: #ccd6de; stroke-width: 1; }
+    .lane  { stroke: #ccd6de; stroke-width: 1; stroke-dasharray: 2 4; }
+    .jnode { fill: #b23a2f; fill-opacity: 0.08; stroke: #b23a2f; stroke-width: 1.6; }
+    .dash  { stroke-dasharray: 3 2; }
+    .mkw   { fill: #2f6d8a; }
+    .mkj   { fill: #b23a2f; }
+    .h1    { font-size: 16px; font-weight: 600; letter-spacing: 1.2px; }
+    .h2    { font-size: 10px; font-weight: 600; letter-spacing: 1.8px; }
+    .sm    { font-size: 9.5px; }
+    .xs    { font-size: 9px; }
+    @media (prefers-color-scheme: dark) {
+      .paper { fill: #0c1116; }
+      .card  { fill: #121a21; stroke: #6cb2ce; }
+      .dead  { stroke: #8d9ca9; }
+      .ink   { fill: #e3ecf3; }
+      .muted { fill: #8d9ca9; }
+      .jfill { fill: #e07a63; }
+      .ffill { fill: #c4ad6a; }
+      .wire  { stroke: #6cb2ce; }
+      .jwire { stroke: #e07a63; }
+      .rule, .lane { stroke: #24313b; }
+      .jnode { fill: #e07a63; fill-opacity: 0.10; stroke: #e07a63; }
+      .mkw   { fill: #6cb2ce; }
+      .mkj   { fill: #e07a63; }
+    }
+  </style>
+
+  <defs>
+    <marker id="aw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path class="mkw" d="M0,1 L9,5 L0,9 z"/>
+    </marker>
+    <marker id="aj" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path class="mkj" d="M0,1 L9,5 L0,9 z"/>
+    </marker>
+  </defs>
+
+  <rect class="paper" x="0" y="0" width="960" height="1180"/>
+
+  <!-- ============================ title ============================ -->
+  <text class="ink h1" x="16" y="30">YOLOV8N-P3 — DATAFLOW AND JOIN MAP</text>
+  <text class="muted sm" x="16" y="48">192x320x3 UINT8 in, 24x40x65 INT21 out · layers 0-15 + one legacy P3 head · 1,610,337 params at nc=1 · 41 Conv / 39 ReLU6 / 10 Concat + 6 Add</text>
+  <line class="rule" x1="16" y1="60" x2="944" y2="60"/>
+
+  <!-- legend -->
+  <g transform="translate(16,78)">
+    <line class="wire" x1="0" y1="-4" x2="18" y2="-4"/>
+    <text class="muted xs" x="24" y="0">feature path</text>
+    <line class="jwire" x1="120" y1="-4" x2="138" y2="-4"/>
+    <text class="muted xs" x="144" y="0">path into a join</text>
+    <circle class="jnode" cx="258" cy="-4" r="6"/>
+    <text class="muted xs" x="270" y="0">join — Concat / Add (costs a FIFO)</text>
+    <circle class="ffill" cx="470" cy="-4" r="4"/>
+    <text class="muted xs" x="480" y="0">fork — free in FINN</text>
+    <rect class="dead" x="600" y="-10" width="16" height="12"/>
+    <text class="muted xs" x="622" y="0">present in stock yolov8n, NOT built</text>
+  </g>
+
+  <!-- ======================= main topology ========================= -->
+  <g transform="translate(15,96)">
+
+    <!-- lanes -->
+    <text class="muted xs" x="0" y="44" letter-spacing="1.4">P2 / stride 4 · 48x80</text>
+    <text class="muted xs" x="0" y="144" letter-spacing="1.4">P3 / stride 8 · 24x40</text>
+    <text class="muted xs" x="0" y="244" letter-spacing="1.4">P4 / stride 16 · 12x20</text>
+    <text class="muted xs" x="0" y="344" letter-spacing="1.4">P5 / stride 32 · 6x10</text>
+    <line class="lane" x1="0" y1="51"  x2="544" y2="51"/>
+    <line class="lane" x1="0" y1="151" x2="914" y2="151"/>
+    <line class="lane" x1="0" y1="251" x2="544" y2="251"/>
+    <line class="lane" x1="0" y1="351" x2="544" y2="351"/>
+
+    <!-- column headings -->
+    <g class="muted xs" text-anchor="middle" letter-spacing="1.6">
+      <text x="212" y="470">BACKBONE</text>
+      <text x="432" y="470">FPN · top-down</text>
+      <text x="775" y="470">HEAD</text>
+    </g>
+
+    <!-- input -->
+    <rect class="card" x="0" y="84" width="92" height="44" rx="2"/>
+    <g text-anchor="middle">
+      <text class="ink" x="46" y="101">image</text>
+      <text class="muted xs" x="46" y="114">192x320x3</text>
+      <text class="muted xs" x="46" y="125">UINT8</text>
+    </g>
+
+    <!-- backbone -->
+    <rect class="card" x="142" y="84"  width="140" height="44" rx="2"/>
+    <rect class="card" x="142" y="184" width="140" height="44" rx="2"/>
+    <rect class="card" x="142" y="284" width="140" height="44" rx="2"/>
+    <rect class="card" x="142" y="384" width="140" height="44" rx="2"/>
+    <g text-anchor="middle">
+      <text class="ink" x="212" y="102">L1-L2 · C2f x1</text>
+      <text class="muted xs" x="212" y="117">32 ch · 48x80</text>
+      <text class="ink" x="212" y="202">L3-L4 · C2f x2</text>
+      <text class="muted xs" x="212" y="217">64 ch · 24x40</text>
+      <text class="ink" x="212" y="302">L5-L6 · C2f x2</text>
+      <text class="muted xs" x="212" y="317">128 ch · 12x20</text>
+      <text class="ink sm" x="212" y="402">L7-L8 C2f x1 · L9 SPPF</text>
+      <text class="muted xs" x="212" y="417">256 ch · 6x10</text>
+    </g>
+
+    <!-- FPN -->
+    <rect class="card" x="362" y="184" width="140" height="44" rx="2"/>
+    <rect class="card" x="362" y="284" width="140" height="44" rx="2"/>
+    <g text-anchor="middle">
+      <text class="ink" x="432" y="202">L15 · C2f x1</text>
+      <text class="muted xs" x="432" y="217">192 -&gt; 64 ch · P3 out</text>
+      <text class="ink" x="432" y="302">L12 · C2f x1</text>
+      <text class="muted xs" x="432" y="317">384 -&gt; 128 ch</text>
+    </g>
+
+    <!-- head -->
+    <rect class="card dash" x="700" y="184" width="150" height="44" rx="2"/>
+    <g text-anchor="middle">
+      <text class="ink sm" x="775" y="202">Detect P3 · legacy</text>
+      <text class="muted xs" x="775" y="217">24x40x65 · INT21</text>
+    </g>
+
+    <!-- sequential wires -->
+    <g class="wire" marker-end="url(#aw)">
+      <line x1="92"  y1="106" x2="138" y2="106"/>
+      <line x1="212" y1="128" x2="212" y2="180"/>
+      <line x1="212" y1="228" x2="212" y2="280"/>
+      <line x1="212" y1="328" x2="212" y2="380"/>
+      <line x1="502" y1="206" x2="696" y2="206"/>
+    </g>
+    <g class="muted xs">
+      <text x="98"  y="98">L0 /2</text>
+      <text x="98"  y="122">16 ch</text>
+      <text x="220" y="158">L3 Conv /2</text>
+      <text x="220" y="258">L5 Conv /2</text>
+      <text x="220" y="358">L7 Conv /2</text>
+      <text x="560" y="198">64 ch · 24x40</text>
+    </g>
+
+    <!-- join wires -->
+    <g class="jwire" marker-end="url(#aj)">
+      <line x1="282" y1="206" x2="319" y2="206"/>
+      <line x1="282" y1="306" x2="319" y2="306"/>
+      <path d="M282,406 L332,406 L332,319"/>
+      <path d="M432,284 L432,246 L332,246 L332,219"/>
+      <line x1="345" y1="206" x2="358" y2="206"/>
+      <line x1="345" y1="306" x2="358" y2="306"/>
+    </g>
+
+    <!-- forks -->
+    <g class="ffill">
+      <circle cx="282" cy="206" r="4"/>
+      <circle cx="282" cy="306" r="4"/>
+    </g>
+
+    <!-- concat nodes -->
+    <circle class="jnode" cx="332" cy="206" r="13"/>
+    <circle class="jnode" cx="332" cy="306" r="13"/>
+    <g class="jfill" text-anchor="middle" font-size="12" font-weight="700">
+      <text x="332" y="210">+</text><text x="332" y="310">+</text>
+    </g>
+    <g class="jfill" text-anchor="middle" font-size="10.5" font-weight="600">
+      <text x="306" y="231">L14</text><text x="306" y="331">L11</text>
+    </g>
+
+    <!-- annotations -->
+    <g class="muted xs">
+      <text x="344" y="242">L13 Upsample x2</text>
+      <text x="340" y="398">L10 Upsample x2</text>
+    </g>
+
+    <!-- pruned callout -->
+    <rect class="dead" x="560" y="270" width="354" height="120" rx="2"/>
+    <text class="muted sm" x="578" y="292" font-weight="600" letter-spacing="1.2">PRUNED — NOT IN THE BITSTREAM</text>
+    <g class="muted xs">
+      <text x="578" y="310">stock L16-L21: Conv /2, Concat, C2f x2 — the bottom-up PAN</text>
+      <text x="578" y="324">plus Detect P4 and Detect P5</text>
+      <text x="578" y="346">The reference ships them unwired: ~32% of its LUT/DSP is</text>
+      <text x="578" y="360">dead logic. Pruning is what makes the net fit — and why</text>
+      <text x="578" y="374">the published resource figures do not apply to this build.</text>
+    </g>
+  </g>
+
+  <!-- ==================== block internals ========================== -->
+  <line class="rule" x1="16" y1="588" x2="944" y2="588"/>
+  <text class="muted h2" x="16" y="610">INSIDE THE BLOCKS — WHERE 14 OF THE 16 JOINS LIVE</text>
+
+  <!-- C2f block -->
+  <g transform="translate(16,624) scale(0.86)">
+    <text class="ink" x="0" y="12" font-weight="600">C2f — 1 Concat, n Adds</text>
+
+    <rect class="card" x="40"  y="46" width="76" height="30" rx="2"/>
+    <rect class="card" x="150" y="46" width="62" height="30" rx="2"/>
+    <rect class="card" x="246" y="46" width="84" height="30" rx="2"/>
+    <rect class="card" x="364" y="46" width="84" height="30" rx="2"/>
+    <g class="ink" text-anchor="middle">
+      <text x="78"  y="66">cv1 1x1</text>
+      <text x="181" y="66">Split</text>
+      <text x="288" y="66">Bneck 1</text>
+      <text x="406" y="66">Bneck n</text>
+    </g>
+    <text class="muted" x="0" y="66">in</text>
+
+    <g class="wire" marker-end="url(#aw)">
+      <line x1="16"  y1="61" x2="36"  y2="61"/>
+      <line x1="116" y1="61" x2="146" y2="61"/>
+      <line x1="212" y1="61" x2="242" y2="61"/>
+      <line x1="330" y1="61" x2="360" y2="61"/>
+    </g>
+    <g class="jwire">
+      <path d="M181,76 L181,120"/>
+      <path d="M228,61 L228,120"/>
+      <path d="M346,61 L346,120"/>
+      <path d="M448,61 L466,61 L466,120"/>
+    </g>
+    <rect class="jnode" x="160" y="120" width="320" height="26" rx="2"/>
+    <text class="jfill" x="320" y="137" text-anchor="middle" font-size="10.5" font-weight="650">Concat — 2 + n tensors</text>
+    <line class="jwire" x1="320" y1="146" x2="320" y2="156" marker-end="url(#aj)"/>
+    <rect class="card" x="282" y="160" width="76" height="30" rx="2"/>
+    <text class="ink" x="320" y="180" text-anchor="middle">cv2 1x1</text>
+    <line class="wire" x1="320" y1="190" x2="320" y2="206" marker-end="url(#aw)"/>
+    <text class="muted xs" x="320" y="218" text-anchor="middle">out · c_out ch</text>
+    <text class="muted xs" x="0" y="176">both halves of the Split are kept,</text>
+    <text class="muted xs" x="0" y="190">and so is every Bneck output</text>
+    <g class="ffill">
+      <circle cx="228" cy="61" r="3.5"/><circle cx="346" cy="61" r="3.5"/>
+    </g>
+
+    <line class="rule" x1="0" y1="236" x2="490" y2="236"/>
+    <text class="muted xs" x="0" y="254" letter-spacing="1.2">BOTTLENECK — THE 6 ADDS (BACKBONE C2f ONLY; THE TWO FPN C2f ARE shortcut=False)</text>
+    <rect class="card" x="150" y="266" width="64" height="26" rx="2"/>
+    <rect class="card" x="234" y="266" width="64" height="26" rx="2"/>
+    <g class="ink sm" text-anchor="middle">
+      <text x="182" y="283">3x3</text><text x="266" y="283">3x3</text>
+    </g>
+    <text class="muted sm" x="92" y="283">in</text>
+    <g class="wire" marker-end="url(#aw)">
+      <line x1="110" y1="279" x2="146" y2="279"/>
+      <line x1="214" y1="279" x2="230" y2="279"/>
+      <line x1="341" y1="279" x2="360" y2="279"/>
+    </g>
+    <g class="jwire" marker-end="url(#aj)">
+      <line x1="298" y1="279" x2="316" y2="279"/>
+      <path d="M128,279 L128,308 L330,308 L330,292"/>
+    </g>
+    <circle class="jnode" cx="330" cy="279" r="11"/>
+    <text class="jfill" x="330" y="283" text-anchor="middle" font-size="11" font-weight="700">+</text>
+    <text class="muted sm" x="366" y="283">out</text>
+    <circle class="ffill" cx="128" cy="279" r="3.5"/>
+    <text class="muted xs" x="0" y="332">chunk() must export as Split — this is a verify_qonnx_v8 gate</text>
+  </g>
+
+  <!-- SPPF block -->
+  <g transform="translate(500,624) scale(0.86)">
+    <text class="ink" x="0" y="12" font-weight="600">SPPF — 1 Concat (4 tensors)</text>
+
+    <rect class="card" x="40"  y="46" width="72" height="30" rx="2"/>
+    <rect class="card" x="142" y="46" width="68" height="30" rx="2"/>
+    <rect class="card" x="244" y="46" width="68" height="30" rx="2"/>
+    <rect class="card" x="346" y="46" width="68" height="30" rx="2"/>
+    <g class="ink" text-anchor="middle">
+      <text x="76"  y="66">cv1 1x1</text>
+      <text x="176" y="65">5x5 pool</text>
+      <text x="278" y="65">5x5 pool</text>
+      <text x="380" y="65">5x5 pool</text>
+    </g>
+    <g class="muted xs" text-anchor="middle">
+      <text x="176" y="92">-&gt; 5x5</text><text x="278" y="92">-&gt; 9x9</text><text x="380" y="92">-&gt; 13x13</text>
+    </g>
+    <text class="muted" x="0" y="66">in</text>
+
+    <g class="wire" marker-end="url(#aw)">
+      <line x1="16"  y1="61" x2="36"  y2="61"/>
+      <line x1="112" y1="61" x2="138" y2="61"/>
+      <line x1="210" y1="61" x2="240" y2="61"/>
+      <line x1="312" y1="61" x2="342" y2="61"/>
+    </g>
+    <g class="jwire">
+      <path d="M126,61 L126,120"/><path d="M228,61 L228,120"/>
+      <path d="M330,61 L330,120"/><path d="M414,61 L432,61 L432,120"/>
+    </g>
+    <rect class="jnode" x="110" y="120" width="340" height="26" rx="2"/>
+    <text class="jfill" x="280" y="137" text-anchor="middle" font-size="10.5" font-weight="650">Concat — 4 tensors</text>
+    <line class="jwire" x1="280" y1="146" x2="280" y2="156" marker-end="url(#aj)"/>
+    <rect class="card" x="242" y="160" width="76" height="30" rx="2"/>
+    <text class="ink" x="280" y="180" text-anchor="middle">cv2 1x1</text>
+    <line class="wire" x1="280" y1="190" x2="280" y2="204" marker-end="url(#aw)"/>
+    <text class="muted xs" x="280" y="216" text-anchor="middle">out · 256 ch</text>
+    <g class="ffill">
+      <circle cx="126" cy="61" r="3.5"/><circle cx="228" cy="61" r="3.5"/><circle cx="330" cy="61" r="3.5"/>
+    </g>
+    <g class="muted xs">
+      <text x="0" y="242">three stacked 5x5 pools = one 13x13 field, far cheaper</text>
+      <text x="0" y="256">pooling is monotonic, so quantization commutes with it</text>
+    </g>
+  </g>
+
+  <!-- Detect head -->
+  <g transform="translate(500,872) scale(0.86)">
+    <text class="ink" x="0" y="12" font-weight="600">Detect P3 — legacy head, 1 Concat</text>
+
+    <rect class="card" x="124" y="32" width="56" height="26" rx="2"/>
+    <rect class="card" x="192" y="32" width="56" height="26" rx="2"/>
+    <rect class="card" x="260" y="32" width="68" height="26" rx="2"/>
+    <rect class="card" x="124" y="82" width="56" height="26" rx="2"/>
+    <rect class="card" x="192" y="82" width="56" height="26" rx="2"/>
+    <rect class="card" x="260" y="82" width="68" height="26" rx="2"/>
+    <g class="ink sm" text-anchor="middle">
+      <text x="152" y="49">3x3</text><text x="220" y="49">3x3</text><text x="294" y="49">1x1 -&gt; 64</text>
+      <text x="152" y="99">3x3</text><text x="220" y="99">3x3</text><text x="294" y="99">1x1 -&gt; 1</text>
+    </g>
+    <text class="muted sm" x="0" y="73">L15 · 64 ch</text>
+
+    <g class="wire" marker-end="url(#aw)">
+      <path d="M96,69 L96,45 L120,45"/>
+      <path d="M96,69 L96,95 L120,95"/>
+      <line x1="180" y1="45" x2="188" y2="45"/>
+      <line x1="248" y1="45" x2="256" y2="45"/>
+      <line x1="180" y1="95" x2="188" y2="95"/>
+      <line x1="248" y1="95" x2="256" y2="95"/>
+    </g>
+    <line class="wire" x1="66" y1="69" x2="92" y2="69"/>
+    <circle class="ffill" cx="96" cy="69" r="3.5"/>
+
+    <g class="jwire" marker-end="url(#aj)">
+      <path d="M328,45 L368,45 L368,56"/>
+      <path d="M328,95 L368,95 L368,82"/>
+    </g>
+    <circle class="jnode" cx="368" cy="69" r="13"/>
+    <text class="jfill" x="368" y="73" text-anchor="middle" font-size="12" font-weight="700">+</text>
+    <line class="wire" x1="381" y1="69" x2="404" y2="69" marker-end="url(#aw)"/>
+    <text class="ink sm" x="410" y="66">24x40x65</text>
+    <text class="muted xs" x="410" y="79">INT21, NHWC</text>
+
+    <g class="muted xs">
+      <text x="124" y="24">box — 4 · reg_max = 64 channels</text>
+      <text x="124" y="126">cls — nc = 1 channel</text>
+      <text x="0" y="156">the live INT19 + INT21 concat (build_notes 10.2)</text>
+      <text x="0" y="170">DFL decode + NMS run off-chip — deploy/postprocess.py</text>
+    </g>
+  </g>
+
+  <!-- ==================== inventory footer ========================= -->
+  <line class="rule" x1="16" y1="1040" x2="944" y2="1040"/>
+  <g transform="translate(16,1060)">
+    <text class="muted h2" x="0" y="0">JOIN INVENTORY — 10 CONCAT + 6 ADD = 16</text>
+    <g class="ink sm">
+      <text x="0" y="22">C2f Concat</text>
+      <text x="0" y="38">Residual Add</text>
+      <text x="0" y="54">FPN Concat</text>
+      <text x="0" y="70">SPPF Concat</text>
+      <text x="0" y="86">Detect Concat</text>
+    </g>
+    <g class="ink sm">
+      <text x="112" y="22">L2 L4 L6 L8 L12 L15</text>
+      <text x="112" y="38">backbone Bnecks</text>
+      <text x="112" y="54">L11 L14</text>
+      <text x="112" y="70">L9</text>
+      <text x="112" y="86">box || cls</text>
+    </g>
+    <g class="jfill sm" text-anchor="end">
+      <text x="272" y="22">6</text><text x="272" y="38">6</text><text x="272" y="54">2</text>
+      <text x="272" y="70">1</text><text x="272" y="86">1</text>
+    </g>
+    <g class="muted sm">
+      <text x="292" y="22">2 + n inputs, all inside one block</text>
+      <text x="292" y="38">the two FPN C2f are shortcut=False</text>
+      <text x="292" y="54">longest span: P3 forks at L4, rejoins at L14</text>
+      <text x="292" y="70">4 tensors, spans 3 stacked pools</text>
+      <text x="292" y="86">the raw head tensor, 64 + 1 channels</text>
+    </g>
+
+    <text class="muted h2" x="620" y="0">PRECISION — NOT UNIFORMLY 4-BIT</text>
+    <g class="ink sm">
+      <text x="620" y="22">7 of 41 convs — stem + Detect</text>
+      <text x="620" y="54">34 of 41 convs — everything else</text>
+    </g>
+    <g class="muted xs">
+      <text x="620" y="36">INT8 weights · UINT8 activations, 6/255</text>
+      <text x="620" y="68">INT4 weights · UINT4 activations, 6/15</text>
+      <text x="620" y="90">One common activation range [0, 6] — "comact" — so every</text>
+      <text x="620" y="104">join is already on one scale: nothing to tie, unlike yolov5.</text>
+    </g>
+  </g>
+</svg>
