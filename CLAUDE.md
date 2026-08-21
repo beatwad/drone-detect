@@ -10,6 +10,9 @@ Full source docs live in [.claude/docs/](.claude/docs/):
 - [build_notes.md](.claude/docs/build_notes.md) — **everything measured about QAT →
   QONNX → FINN → bitstream.** Read this before touching `qat/`, `export/`, or
   running a FINN build; it is where all the hard-won toolchain detail lives.
+- [research/](.claude/docs/research/) — findings from primary sources, cited.
+  **Kept apart from build_notes on purpose:** build_notes is what we measured,
+  research is what the docs say. A claim moves across only once we measure it.
 
 ## Pipeline (target)
 `yolov8n-P3 (float, ReLU6)` → `Brevitas QAT (W4A4)` → `QONNX export` →
@@ -295,3 +298,6 @@ Key facts, all detailed in [build_notes.md](.claude/docs/build_notes.md):
 - Commit/push only when the user asks.
 - Change only what's necessary; don't add tests/examples unless asked.
 - Kaggle dataset pull needs `~/.kaggle/kaggle.json` (manual credential step).
+- Research output goes to `.claude/docs/research/<question>.md`, one file per
+  question, every claim cited to a primary source. Not into build_notes — see
+  above for why.

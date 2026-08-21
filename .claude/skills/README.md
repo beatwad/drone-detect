@@ -5,7 +5,7 @@ is installed on any given machine.
 
 | skill | what it is for here |
 |---|---|
-| `research` | primary-source investigation written up as a Markdown note. The open one is `pip install pynq` over the built XRT — there is no official PYNQ image for the ZCU102, and it is the last genuinely unknown step in the chain (README §9). |
+| `research` | primary-source investigation written up as a Markdown note. **Output goes to `.claude/docs/research/`** — see the convention in CLAUDE.md and that directory's README. The open one is `pip install pynq` over the built XRT — there is no official PYNQ image for the ZCU102, and it is the last genuinely unknown step in the chain (README §9). |
 | `grilling` | stress-testing a decision before it costs money. Open question 1 — lens FOV and crop — is the live one: it rests on "mid ≈ close" transferring from diverse web photos to centre crops through one fixed lens, which is an assumption, not a measurement. |
 | `diagnosing-bugs` | for board bring-up. If `deploy/run_on_board.py` disagrees with the simulation, the cause is somewhere between bitstream, driver and dequantization, and that needs a tight pass/fail loop rather than staring at code. |
 
