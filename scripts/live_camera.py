@@ -1,5 +1,11 @@
 """Live drone detection from a UVC camera.
 
+Capture runs in its own thread so the MJPEG decode overlaps inference; at full
+resolution the two are the whole frame budget (6.1 ms and 4.9 ms) and serialising
+them caps the loop at ~81 FPS. The thread keeps only the newest frame: if
+inference falls behind, frames are dropped rather than queued, so latency stays
+bounded at the cost of throughput.
+
 The venv's cv2 is the headless build (albumentations pulls opencv-python-headless),
 so there is no imshow. View the stream at http://localhost:8000/ instead, or use
 --save to write an annotated mp4.
@@ -57,18 +63,46 @@ if not cap.isOpened():
     raise SystemExit(f"cannot open /dev/video{a.device}")
 
 model = YOLO(a.weights)
+ok, warm = cap.read()          # CUDA init costs ~0.5 s; pay it before the thread starts
+if ok:
+    model.predict(warm, imgsz=a.imgsz, verbose=False)
 writer = cv2.VideoWriter(a.save, cv2.VideoWriter_fourcc(*"mp4v"), float(a.fps), (w, h)) if a.save else None
 
 server = HTTPServer(("127.0.0.1", a.port), Handler)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 print(f"streaming at http://localhost:{a.port}/  (ctrl-c to stop)", flush=True)
 
-n, t_prev, t_preview, fps = 0, time.time(), 0.0, 0.0
-try:
-    while True:
+newest = {"frame": None, "seq": 0}
+new_frame = threading.Condition()
+stop = threading.Event()
+
+
+def capture():
+    while not stop.is_set():
         ok, frame = cap.read()
         if not ok:
             break
+        with new_frame:
+            newest["frame"], newest["seq"] = frame, newest["seq"] + 1
+            new_frame.notify()
+    with new_frame:            # unblock the consumer on camera failure
+        stop.set()
+        new_frame.notify()
+
+
+grabber = threading.Thread(target=capture, daemon=True)
+grabber.start()
+
+n, t_prev, t_preview, fps, seq, dropped = 0, time.time(), 0.0, 0.0, 0, 0
+try:
+    while True:
+        with new_frame:
+            new_frame.wait_for(lambda: newest["seq"] != seq or stop.is_set())
+            if stop.is_set():
+                break
+            frame, last = newest["frame"], newest["seq"]
+        dropped += last - seq - 1
+        seq = last
         r = model.predict(frame, imgsz=a.imgsz, conf=a.conf, verbose=False)[0]
 
         now = time.time()
@@ -78,7 +112,7 @@ try:
         if now - t_preview >= 1.0 / a.preview_fps or writer:
             t_preview = now
             out = r.plot()
-            cv2.putText(out, f"{fps:5.1f} FPS  {len(r.boxes)} det", (8, 24),
+            cv2.putText(out, f"{fps:5.1f} FPS  {len(r.boxes)} det  {dropped} dropped", (8, 24),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             latest["jpeg"] = cv2.imencode(".jpg", out)[1].tobytes()
             if writer:
@@ -90,7 +124,9 @@ try:
 except KeyboardInterrupt:
     pass
 
+stop.set()
+grabber.join(timeout=2.0)   # never release the device under an in-flight read()
 cap.release()
 if writer:
     writer.release()
-print(f"{n} frames, {fps:.1f} FPS")
+print(f"{n} frames, {fps:.1f} FPS, {dropped} dropped")
