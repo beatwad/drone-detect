@@ -10,6 +10,9 @@ Full source docs live in [.claude/docs/](.claude/docs/):
 - [build_notes.md](.claude/docs/build_notes.md) — **everything measured about QAT →
   QONNX → FINN → bitstream.** Read this before touching `qat/`, `export/`, or
   running a FINN build; it is where all the hard-won toolchain detail lives.
+- [issues.md](.claude/docs/issues.md) — open problems, each with what "solved"
+  would look like. The unglamorous list: no real footage yet, no lens, no
+  trigger, USB where MIPI belongs.
 - [research/](.claude/docs/research/) — findings from primary sources, cited.
   **Kept apart from build_notes on purpose:** build_notes is what we measured,
   research is what the docs say. A claim moves across only once we measure it.

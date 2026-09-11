@@ -1630,3 +1630,197 @@ MIC2544 with its fault flag on **DS51** — if a 900 mA camera trips the limit,
 that LED says so.
 
 Console is the CP2108 quad UART on **J83** (channels 0/1 are PS-side), 115200.
+
+---
+
+## 12. The camera, on the host — 2026-09-10
+
+First measurements against real hardware in this chain. All of it is host-side
+USB capture; none of it is the board. `scripts/live_camera.py` is the harness.
+
+### 12.1 What the camera actually is
+
+`1bcf:2d50` "Camera2034" (Sunplus UVC bridge) **is** the ELP AR0234 module from
+CLAUDE.md's camera decision — 1920×1200 global shutter. It was briefly mistaken
+for a generic webcam because on a USB 2.0 port it enumerates at 480 Mbit/s and
+offers only low rates. **The speed reading describes the port, not the part.**
+Check it before drawing any conclusion about the sensor:
+
+```bash
+for d in /sys/bus/usb/devices/*/; do [ -f "$d/idVendor" ] && \
+  [ "$(cat $d/idVendor)" = "1bcf" ] && echo "$d $(cat $d/speed) Mbit/s"; done
+```
+
+480 = USB 2.0, capped at 30 fps. 5000 = SuperSpeed, full mode list below.
+
+`v4l-utils` is **not installed** and does not need to be — the modes come out of
+raw `VIDIOC_ENUM_FRAMEINTERVALS` ioctls; `scripts/` has the enumerator pattern.
+Measured on SuperSpeed, MJPG (YUYV is the same list minus the top rates, and is
+bandwidth-bound above 720p):
+
+| resolution | advertised fps |
+|---|---|
+| 1920×1200 | 120, 80, 60, 30, 10 |
+| 1920×1080 | 120, 80, 60, 30, 10 |
+| 1280×720  | 200, 150, 120, 80, 60, 30, 10 |
+| 640×480   | 200, 150, 120, 80, 60, 30, 10 |
+
+All of them are delivered as advertised — 1920×1200 @120 measures an 8.00 ms
+median frame interval, 640×480 @200 measures 4.88 ms.
+
+### 12.2 Two OpenCV capture settings are load-bearing
+
+Both cost exactly a factor of the frame rate, and neither announces itself.
+
+- **`CAP_PROP_BUFFERSIZE` must be ≥ 2.** With a single V4L2 buffer the driver
+  has nothing queued during the dequeue/requeue cycle, so every second frame
+  lands nowhere. The tell is unmistakable once seen: *every* mode returns
+  **exactly half** its nominal rate — 30→14.7, 10→5.0, 5→2.5. A halving that
+  tracks every mode is a property of the consumer, never of a sensor.
+- **`CAP_PROP_FPS` must be set explicitly**, or the camera stays in its default
+  30 fps mode no matter what it supports. `cap.get(CAP_PROP_FPS)` reports the
+  *requested* mode, so it will happily read 30 while you are getting 15, and
+  read 120 before you have asked for it.
+
+**Refuted along the way:** auto-exposure throttling the sensor. Plausible —
+a long exposure genuinely can cap frame rate — but sweeping exposure 600 → 10
+never moved the frame interval off 64 ms. Refuted, and the real cause was the
+buffer starvation above.
+
+### 12.3 Frame budget, and why capture needs its own thread
+
+Per-stage medians, MJPG, `imgsz=320`, RTX 4090:
+
+| capture | grab | decode | infer | plot+encode | serial total |
+|---|---|---|---|---|---|
+| 640×480 @120   | 3.6 | 0.9 | 3.7 | 0.8 | 8.96 ms → 112 FPS |
+| 1280×720 @120  | 0.0 | 2.4 | 4.1 | 2.3 | 8.79 ms → 114 FPS |
+| 1920×1200 @120 | 0.0 | 6.1 | 4.9 | 6.3 | 17.35 ms → 58 FPS |
+
+Two fixes, in order of size:
+
+1. **Annotation and JPEG encode do not belong on the critical path.** They exist
+   for the preview only; throttled to 30 Hz (`--preview-fps`), detection still
+   runs on every frame.
+2. **MJPEG decode and inference must overlap.** At full resolution they are the
+   entire budget (6.1 + 4.9 ms) and serialising them caps the loop at 81 FPS.
+   With capture in its own thread, 1920×1200 reaches **130 FPS** — above the
+   camera's own rate. Both `cv2` and torch release the GIL, so threads suffice.
+
+The capture thread keeps **only the newest frame**. A bounded queue would
+overlap decode just as well, but when inference falls behind, a queue feeds the
+detector progressively older images while reporting a healthy frame rate.
+Dropping bounds latency instead, and the drop counter is on the overlay so the
+loss is visible rather than silent. For an aiming pipeline a stale frame is
+worse than no frame — same reasoning as the missing hardware trigger.
+
+Measured, 500 frames, threaded, 0 dropped in steady state at every resolution:
+**640×480 123 FPS / 1280×720 121 FPS / 1920×1200 130 FPS.**
+
+**Warm the model before starting the capture thread.** CUDA init on the first
+`predict()` takes ~0.5 s while the camera is already streaming — worth exactly
+65 dropped frames at startup, every run, and zero thereafter. It reads like a
+steady-state loss and is not one; tripling the frame count and watching the
+number stay at 65 is what distinguishes them.
+
+### 12.4 Frame rate costs light
+
+The frame interval caps exposure: 120 fps allows at most 8.3 ms. Same scene,
+same auto-exposure, indoor evening lighting, mean grey level:
+
+| fps | mean | p5 | p95 |
+|---|---|---|---|
+| 30  | 98.0 | 15 | 183 |
+| 60  | 50.0 |  4 | 120 |
+| 120 | 43.2 |  4 | 111 |
+| 200 | 27.3 |  2 |  84 |
+
+**30 → 120 fps costs 2.3× the brightness.** Against a bright sky this is
+irrelevant; indoors, or at dusk, it is a real detection penalty that no amount
+of host-side processing recovers. Accuracy has **not** been measured as a
+function of capture rate — see issues.md.
+
+### 12.5 At `imgsz=320` the network input shape follows the capture aspect
+
+Ultralytics letterboxes to the long side and rounds to a multiple of the stride,
+so the *capture* resolution silently decides the *network* input:
+
+| capture | aspect | network input (H×W) |
+|---|---|---|
+| 640×480   | 4:3  | 256×320 |
+| 1280×720  | 16:9 | **192×320** |
+| 1920×1200 | 16:10 | 224×320 |
+
+**Only 1280×720 matches the built bitstream's 192×320.** On the host this is
+invisible — the net is fully convolutional and PyTorch obliges. On the FPGA the
+shape is baked into the bitstream and the other two are simply not runnable.
+So the host-side FPS figures above are not comparing equal work: 640×480 feeds
+a 256×320 network, 33% more pixels than the board will ever see.
+
+Capture at **1280×720** when the number is meant to mean anything about the
+deployment path.
+
+### 12.6 YUYV removes decode — and, more to the point, lets the crop happen first
+
+Measured 2026-09-11, same camera on SuperSpeed, ad-hoc raw-ioctl enumeration and
+an OpenCV capture harness (both throwaway; §12.1's pointer to an enumerator in
+`scripts/` is stale — there isn't one).
+
+**The mode lists are nearly identical.** YUYV loses the 120 fps rate only at
+1600×1200 and above; everything at 1280×960 and below matches MJPG exactly:
+
+| resolution | MJPG | YUYV |
+|---|---|---|
+| 1920×1200 / 1920×1080 / 1600×1200 | 120, 80, 60, 30, 10 | **80**, 60, 30, 10 |
+| 1280×960 | 120, 80, 60, 30, 10 | same |
+| 1280×720 / 640×480 | 200, 150, 120, 80, 60, 30, 10 | same |
+| 512×512 | 120, 80, 60, 30, 10 | same |
+
+So **YUYV costs nothing at 1280×720**, which is the only mode that feeds the
+bitstream's 192×320 input (§12.5). Delivery measured, `CAP_PROP_CONVERT_RGB` on,
+300 frames: 60 → 16.03 ms, 120 → 8.02 ms, 200 → **4.06 ms**.
+
+The 200 fps figure is *faster than nominal* (expected 5.0 ms) and is not
+explained. 60 and 120 both run ~4% fast, which could simply be the camera's
+clock; 23% cannot. **Check for duplicated frames before quoting 200 fps** —
+§12.2's halving artefact is precedent for the consumer inventing a frame rate.
+
+Note also that the YUYV cut-off falls almost exactly on a constant-bandwidth
+curve: 1920×1200@80 and 1280×720@200 are both **368.6 MB/s**, and every
+disallowed rate is above it. Tidy, and it would predict the whole list — except
+that the measured 4.06 ms at 720p implies 453 MB/s, above the line. Treat the
+cap as a hypothesis, not a rule, until the frame-duplication question is settled.
+
+**The real win is that the crop can precede the per-pixel work.** YUYV is a
+packed array, so a centre window is pointer arithmetic and only the window gets
+converted. A JPEG must be decoded whole before anything can be cropped out of
+it. Single-threaded (`setNumThreads(1)`, standing in for one A53), 1280×720,
+320×192 centre window:
+
+| operation | ms |
+|---|---|
+| MJPEG decode, full frame | 1.40 |
+| YUYV → BGR, full frame | 0.60 |
+| YUYV crop (view, no copy) | 0.0003 |
+| **YUYV crop → BGR** | **0.05** |
+| MJPEG decode, then crop | 1.40 |
+
+**28× cheaper than the MJPEG path, of which avoiding decode is only 2.3×**; the
+rest is not converting 24× the pixels the network sees. Crop on an even x
+boundary — 4:2:2 pairs chroma across adjacent pixels.
+
+Two caveats. The JPEG measured was **16 KB** — an empty indoor scene. Outdoors
+over foliage expect 100–200 KB and a proportionally slower decode, so 1.40 ms is
+MJPEG's best case, not its typical one. And this is a desktop core; four A53s at
+1.2 GHz are roughly 4–6× slower each, putting the crop path near 0.25 ms.
+
+**The jitter argument is the stronger one.** MJPEG decode time varies with scene
+content; YUYV's cost is constant and content-independent. Scene-dependent
+latency lands directly in aim error — the same class of error the hardware
+trigger exists to remove (issues §4) — and it gets worse exactly where the
+target is hardest, against a cluttered ground background.
+
+**The camera advertises digital PTZ**, which was not expected and is not yet
+shown to do anything: `Zoom, Absolute` 100–200 (1–2×), `Pan/Tilt, Absolute`
+±648000 arcsec in 3600 (1°) steps, and a `Region of Interest Auto Ctrls` flag.
+Enumerated only — no behaviour measured. See issues §2.
