@@ -45,10 +45,11 @@ import time
 
 import numpy as np
 from qonnx.core.datatype import DataType
-from pynq.pl_server.device import Device
 
-from driver_base import FINNExampleOverlay
 from postprocess import dequantize
+
+# pynq and driver_base are imported where the accelerator is opened, not here:
+# --self-test runs the comparison on the host, where neither is installed.
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOL_LSB = 0.05      # see the docstring: 1.0 = off by one, ~0.008 = float32 ULP
@@ -70,6 +71,52 @@ io_shape_dict = {
 }
 
 
+def compare(raw, gold, scale, bias):
+    """Raw INT21 vs the simulated graph, in LSB. Returns the per-element LSB error."""
+    m = min(len(gold), len(raw))
+    got = dequantize(raw[:m], scale, bias)                 # -> (m, 65, 24, 40) float
+    d = np.abs(got - gold[:m])
+    lsb = d / scale.reshape(1, -1, 1, 1)
+    print(f"  max |delta|      {d.max():.6e}")
+    print(f"  max |delta| LSB  {lsb.max():.6e}")
+    print(f"  elements off > {TOL_LSB} LSB   {int((lsb > TOL_LSB).sum())} / {lsb.size}")
+    return lsb, m
+
+
+def self_test(golden, dequant):
+    """Exercise the comparison itself, on the host, with no hardware.
+
+    Quantizing the golden outputs back to INT21 reproduces exactly what a correct
+    accelerator would have emitted, so the two controls are available without a
+    board: the round trip must come out at zero, and a single element moved by
+    one must be caught. Passing both means a failure on hardware is hardware.
+    """
+    gold = np.load(golden)["y"]                            # (M, 65, 24, 40) float NCHW
+    dq = np.load(dequant)
+    scale, bias = dq["scale"], dq["bias"]
+
+    raw = np.round((gold.transpose(0, 2, 3, 1) - bias.reshape(1, 1, 1, -1))
+                   / scale.reshape(1, 1, 1, -1)).astype(np.int64)
+    assert np.abs(raw).max() < 2 ** 20, "reconstructed values do not fit in INT21"
+
+    print(f"{len(gold)} golden frames, reconstructed to INT21 "
+          f"(max |value| {np.abs(raw).max()})")
+    print("\npositive control — an accelerator that is exactly right:")
+    pos = compare(raw, gold, scale, bias)[0].max() <= TOL_LSB
+
+    bad = raw.copy()
+    bad[0, 0, 0, 0] += 1
+    print("\nnegative control — the same, one element off by one:")
+    neg = compare(bad, gold, scale, bias)[0].max() > TOL_LSB
+
+    print(f"\npositive control {'PASS' if pos else 'FAIL'}, "
+          f"negative control {'PASS' if neg else 'FAIL'}")
+    ok = pos and neg
+    print("harness is sound" if ok else
+          "HARNESS IS BROKEN — fix this before trusting a board result")
+    return 0 if ok else 1
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--bitfile", default=os.path.join(HERE, "resizer.bit"))
@@ -78,7 +125,15 @@ def main():
     p.add_argument("--dequant", default=os.path.join(HERE, "v8n_p3_w4a4_192x320_dequant.npz"))
     p.add_argument("-n", type=int, default=0, help="frames to run (0 = all in inputs.npz)")
     p.add_argument("--save", default="", help="write raw INT21 output to this .npz")
+    p.add_argument("--self-test", action="store_true",
+                   help="check the comparison on the host, without a board")
     args = p.parse_args()
+
+    if args.self_test:
+        return self_test(args.golden, args.dequant)
+
+    from pynq.pl_server.device import Device
+    from driver_base import FINNExampleOverlay
 
     x = np.load(args.inputs)["x"]
     if args.n:
@@ -118,16 +173,9 @@ def main():
         if k in ("runtime[ms]", "throughput[images/s]")))
 
     gold = np.load(args.golden)["y"]                       # (M, 65, 24, 40) float NCHW
-    m = min(len(gold), len(raw))
-    got = dequantize(raw[:m], scale, bias)                 # -> (m, 65, 24, 40) float
-    d = np.abs(got - gold[:m])
-    lsb = d / scale.reshape(1, -1, 1, 1)
-
-    print(f"\ncompared {m} frames against the simulation "
-          f"({len(raw) - m} more ran without a golden output)")
-    print(f"  max |delta|      {d.max():.6e}")
-    print(f"  max |delta| LSB  {lsb.max():.6e}")
-    print(f"  elements off > {TOL_LSB} LSB   {int((lsb > TOL_LSB).sum())} / {lsb.size}")
+    print(f"\ncompared {min(len(gold), len(raw))} frames against the simulation "
+          f"({max(0, len(raw) - len(gold))} more ran without a golden output)")
+    lsb, m = compare(raw, gold, scale, bias)
     for k in range(m):
         print(f"    frame {k}: {lsb[k].max():.3e} LSB")
 

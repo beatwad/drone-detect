@@ -498,12 +498,29 @@ python3 run_on_board.py
 [deploy/run_on_board.py](deploy/run_on_board.py) runs 60 frames through the real
 accelerator and compares INT21 against the same frames through the simulated
 graph, in LSB units. Tolerance **0.05 LSB**: a genuine error is 1.0, float32
-noise at these magnitudes is ~0.008. Positive and negative controls both pass on
-the host, so a failure means hardware, not harness.
+noise at these magnitudes is ~0.008.
 
-Still missing before this works: **`pip install pynq` over the built XRT.** No
-official PYNQ image exists for the ZCU102 — this is the one genuinely unknown
-step left in the chain.
+The comparison itself can be checked without a board, so that a failure on
+hardware means hardware:
+
+```bash
+uv run deploy/run_on_board.py --self-test \
+  --golden ~/finn_build_mdanilow/verify_io/out_hw.npz
+```
+
+Quantizing the golden outputs back to INT21 is exactly what a correct
+accelerator would have emitted, so the round trip is a positive control and the
+same data with one element moved by one is a negative control. Measured
+2026-09-19: **0.000 LSB** and **0.998 LSB** over all 3,744,000 elements of 60
+frames — zero, and one LSB, as they should be.
+
+Still missing before the real run works: **`pip install pynq` over the built
+XRT.** No official PYNQ image exists for the ZCU102 — this is the one genuinely
+unknown step left in the chain. The package and its aarch64 dependencies are
+staged offline at `/home/alex/pynq_offline` and land on the card, but the image
+ships no compiler and pynq builds C extensions on aarch64, so the install needs
+either a toolchain in the rootfs or a patched `setup.py` — see that directory's
+README, and `.claude/docs/research/pynq-on-zcu102.md`.
 
 ---
 
