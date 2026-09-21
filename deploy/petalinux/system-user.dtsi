@@ -34,6 +34,32 @@
  * SEL = 1110 -> PCIe Gen2 x1 + DP.0 + USB0 + SATA1, which is the ZCU102's
  * documented default combination and the one our PS configuration expects.
  */
+/*
+ * ZOCL. PYNQ 3.x allocates every DMA buffer through XRT, and XRT on embedded
+ * ZynqMP will not come up without this node -- the driver has no hardware of
+ * its own to be discovered by. Without it /dev/dri/renderD128 never appears and
+ * `import pynq` fails with "No Devices Found", which reads like a Python
+ * problem and is not one. The `zocl` rootfs package is already enabled in
+ * configure.sh, so the module ships either way; it just never probes.
+ *
+ * PetaLinux writes this node itself, but ONLY for a Vitis extensible platform
+ * XSA. export_xsa.tcl hands it a plain XSA out of the FINN Vivado project, so
+ * we write it by hand.
+ *
+ * The address is NOT the 0xA0000000 from Xilinx's tutorials: the generated tree
+ * already puts StreamingDataflowPartition_0 at 0xA0000000 and _2 at 0xA0001000,
+ * so that would collide with the accelerator. 0xA0010000 is the next clear 64K
+ * in the low PL aperture. zocl only needs the region to be valid and unused --
+ * we use it for buffer allocation, not for ERT kernel scheduling.
+ */
+&amba {
+	zyxclmm_drm {
+		compatible = "xlnx,zocl";
+		status = "okay";
+		reg = <0x0 0xA0010000 0x0 0x10000>;
+	};
+};
+
 &tca6416_u97 {
 	gtr_sel0 {
 		gpio-hog;

@@ -48,7 +48,13 @@ hardware:
 dtc -I dtb -O dts -o sys.dts images/linux/system.dtb   # dtc is in build/tmp/sysroots-components/
 grep -E 'dr_mode|maximum-speed' sys.dts                # "host", "super-speed"
 grep -A3 gtr_sel sys.dts                               # sel0 low, sel1..3 high = SEL 1110
+grep -A3 zyxclmm sys.dts                               # zocl at 0xa0010000, NOT 0xa0000000
+grep bootargs sys.dts                                  # must contain cma=512M
 ```
+
+The last two are what PYNQ needs. Neither fails loudly: without the zocl node
+`import pynq` dies with "No Devices Found" and nothing says why. See
+[research/pynq-on-zcu102.md](../../.claude/docs/research/pynq-on-zcu102.md).
 
 `BOOT.BIN` should be **~1.8 MB**. If it is ~28 MB the bitstream was baked in —
 that is deliberately avoided, since the FINN driver loads `resizer.bit` at
