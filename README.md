@@ -42,6 +42,7 @@ is in git.
 | **this file** | how to reproduce, step by step |
 | [.claude/docs/build_notes.md](.claude/docs/build_notes.md) | **why** each step is the way it is — every measurement, every trap. ~1,600 lines, organised as findings, not instructions. Read the relevant § before changing anything in `qat/`, `export/` or a FINN build. |
 | [CLAUDE.md](CLAUDE.md) | current status, locked decisions, open questions |
+| [deploy/README.md](deploy/README.md) | what goes on the card, and what each file is |
 | [deploy/petalinux/README.md](deploy/petalinux/README.md) | the board's Linux image, in detail |
 | [TODO.md](TODO.md) | the original sketch of the tracking flow, now written up as §11 |
 
@@ -514,13 +515,24 @@ same data with one element moved by one is a negative control. Measured
 2026-09-19: **0.000 LSB** and **0.998 LSB** over all 3,744,000 elements of 60
 frames — zero, and one LSB, as they should be.
 
-Still missing before the real run works: **`pip install pynq` over the built
-XRT.** No official PYNQ image exists for the ZCU102 — this is the one genuinely
-unknown step left in the chain. The package and its aarch64 dependencies are
-staged offline at `/home/alex/pynq_offline` and land on the card, but the image
-ships no compiler and pynq builds C extensions on aarch64, so the install needs
-either a toolchain in the rootfs or a patched `setup.py` — see that directory's
-README, and `.claude/docs/research/pynq-on-zcu102.md`.
+One thing the image does not have is PYNQ, and there is no official ZCU102
+image to take it from. It rides on the card in `deploy/pynq_offline/`; on the
+board:
+
+```bash
+cd /home/root/deploy/pynq_offline
+pip3 install --no-index --find-links wheels pynq-3.0.1-py3-none-any.whl ipython
+```
+
+That is a **rebuilt, pure-Python PYNQ**, because the image ships no compiler and
+pynq's sdist runs `make` on aarch64. None of that native code is on our path —
+`driver_base.py` uses only `Overlay`, `allocate` and `ps.Clocks` — so the wheel
+is built on the host with `ext_modules` empty. `ipython` must be named
+explicitly: it is an undeclared dependency of `pynqmetadata`, and `import pynq`
+dies without it. Reasoning and the rebuild recipe are in build_notes §11.10.
+
+What remains genuinely unknown is one line: whether `Device.devices` is
+non-empty on the real board.
 
 ---
 
@@ -675,7 +687,8 @@ Stated plainly, because a clean list of commands would otherwise be a lie.
 .claude/docs/  build_notes.md — the measured record behind every decision
 configs/       dataset yamls, per-regime val subsets, model yamls, generated hyps
 data/          raw sources + merged set + manifest.csv          (gitignored)
-deploy/        postprocess.py, track.py, run_on_board.py, dequant constants
+deploy/        IS the board's /home/root/deploy -- bitstream, driver, golden
+               set, postprocess.py, track.py, offline PYNQ. See deploy/README.md
   petalinux/   the board's Linux image: Dockerfile, configure.sh, dtsi, mksd.sh
 export/        QONNX export, verification gates, FINN driver + folding search
 qat/           Brevitas QAT — quantize_v8.py builds the graph, train_qat_v8.py fine-tunes

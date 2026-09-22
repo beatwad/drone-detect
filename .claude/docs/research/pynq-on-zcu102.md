@@ -118,7 +118,13 @@ Set it in PetaLinux config → DTG settings → Kernel Bootargs, or in
 The plan is sound and the premise behind it is correct, but it was one step short:
 `pip install pynq` cannot succeed on the image as currently built, because the
 kernel side XRT depends on is absent. Fix §5.1 and §5.2, rebuild, then install
-PYNQ 3.0.1 from its sdist.
+PYNQ 3.0.1.
+
+> **From the sdist is wrong, though — measured 2026-09-21, build_notes §11.10.**
+> There is no aarch64 wheel on PyPI and the sdist runs `make` on five C
+> libraries, which the image has no compiler for. But that native code is all
+> `pynq.lib` drivers we never import, so PYNQ builds as a pure-Python wheel on
+> the host instead. Fallback 1 below is what the toolchain route would cost.
 
 Fallbacks, in order of preference, if that still fails on hardware:
 

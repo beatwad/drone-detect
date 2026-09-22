@@ -6,38 +6,40 @@
 #
 # Layout (what petalinux-package --boot expects, and what SW6 = SD boot reads):
 #   p1  1 GB  FAT32  BOOT   BOOT.BIN, image.ub, boot.scr
-#   p2  rest  ext4   root   rootfs.tar.gz unpacked
+#   p2  rest  ext4   root   rootfs.tar.gz unpacked, + deploy/ in /home/root
+#
+# Everything this writes comes from the repository except the root filesystem:
+# rootfs.tar.gz is 73 MB and does not belong in git. Point ROOTFS at it, or
+# rebuild it from deploy/petalinux/ (boot/drone_v8.xsa is the input).
 #
 # The bitstream is deliberately NOT in BOOT.BIN. The FINN driver loads it at
 # runtime through pynq.Overlay, so rebuilding the network is a file copy rather
-# than a new boot image. resizer.bit is put on the rootfs instead.
+# than a new boot image. resizer.bit rides in deploy/ instead.
 set -euo pipefail
 
 DEV="${1:-}"
 GO="${2:-}"
 HERE=$(dirname "$(readlink -f "$0")")
-IMG=/home/alex/petalinux/projects/drone/images/linux
-PKG=/home/alex/finn_build_mdanilow/drone_v8_bit/deploy
-VERIFY=/home/alex/finn_build_mdanilow/verify_io
-PYNQ=/home/alex/pynq_offline
+DEPLOY=$(dirname "$HERE")          # deploy/ -- exactly what lands in /home/root
+BOOT="$DEPLOY/boot"
+ROOTFS="${ROOTFS:-/home/alex/petalinux/projects/drone/images/linux/rootfs.tar.gz}"
 
 [ -b "$DEV" ] || { echo "usage: $0 /dev/sdX [--yes]   (block device required)"; exit 1; }
 case "$DEV" in /dev/sda|/dev/sdb|/dev/sdc|/dev/nvme*) echo "REFUSING: $DEV looks like a system disk."; exit 1;; esac
-for f in BOOT.BIN image.ub boot.scr rootfs.tar.gz; do
-    [ -f "$IMG/$f" ] || { echo "missing $IMG/$f — run petalinux-package --boot first"; exit 1; }
+for f in BOOT.BIN image.ub boot.scr; do
+    [ -f "$BOOT/$f" ] || { echo "missing $BOOT/$f"; exit 1; }
 done
-for f in "$VERIFY/inputs.npz" "$VERIFY/out_hw.npz" "$HERE/../run_on_board.py"; do
-    [ -f "$f" ] || { echo "missing $f — run_on_board.py cannot run without it"; exit 1; }
+[ -f "$ROOTFS" ] || { echo "missing $ROOTFS -- set ROOTFS=/path/to/rootfs.tar.gz"; exit 1; }
+for f in run_on_board.py resizer.bit resizer.hwh driver_base.py inputs.npz out_hw.npz; do
+    [ -f "$DEPLOY/$f" ] || { echo "missing $DEPLOY/$f"; exit 1; }
 done
 
 echo "target : $DEV"
 lsblk -o NAME,SIZE,MODEL,MOUNTPOINT "$DEV"
 echo
 echo "will write:"
-ls -la "$IMG"/{BOOT.BIN,image.ub,boot.scr,rootfs.tar.gz} | sed 's/^/  /'
-echo "  + $PKG (accelerator driver + resizer.bit) -> /home/root/deploy"
-echo "  + run_on_board.py, inputs.npz, out_hw.npz  -> /home/root/deploy"
-if [ -d "$PYNQ" ]; then echo "  + $PYNQ (offline PYNQ 3.0.1 + aarch64 wheels) -> /home/root/pynq_offline"; fi
+ls -la "$BOOT"/{BOOT.BIN,image.ub,boot.scr} "$ROOTFS" | sed 's/^/  /'
+echo "  + $DEPLOY (driver, bitstream, golden set, offline PYNQ) -> /home/root/deploy"
 echo
 [ "$GO" == "--yes" ] || { echo "dry run. re-run with --yes to write. THIS ERASES $DEV."; exit 0; }
 
@@ -55,19 +57,16 @@ sudo mkfs.ext4 -F -L root "${DEV}2"
 
 M=$(mktemp -d)
 sudo mount "${DEV}1" "$M"
-sudo cp "$IMG"/{BOOT.BIN,image.ub,boot.scr} "$M"/
+sudo cp "$BOOT"/{BOOT.BIN,image.ub,boot.scr} "$M"/
 sudo umount "$M"
 
 sudo mount "${DEV}2" "$M"
-sudo tar xzf "$IMG/rootfs.tar.gz" -C "$M"
+sudo tar xzf "$ROOTFS" -C "$M"
 sudo mkdir -p "$M/home/root/deploy"
-sudo cp -r "$PKG"/. "$M/home/root/deploy/"
-# The bring-up check itself: the driver package carries postprocess.py and the
-# dequantization constants, but not the script or the 60-frame golden set.
-sudo cp "$HERE/../run_on_board.py" "$VERIFY/inputs.npz" "$VERIFY/out_hw.npz" \
-        "$M/home/root/deploy/"
-# PYNQ is not on the image and the board may have no network. See its README.
-if [ -d "$PYNQ" ]; then sudo cp -r "$PYNQ" "$M/home/root/pynq_offline"; fi
+# deploy/ minus the two host-side directories: petalinux/ builds the image, and
+# boot/ has already gone to p1. Everything else is board-side by construction.
+sudo tar -C "$DEPLOY" --exclude=./petalinux --exclude=./boot --exclude=__pycache__ \
+         -cf - . | sudo tar -C "$M/home/root/deploy" -xf -
 sudo sync
 sudo umount "$M"
 rmdir "$M"

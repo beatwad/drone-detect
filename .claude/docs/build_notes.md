@@ -1633,6 +1633,73 @@ Console is the CP2108 quad UART on **J83** (channels 0/1 are PS-side), 115200.
 
 ---
 
+### 11.10 PYNQ needs no compiler on the board — 2026-09-21
+
+`pip install pynq` was the last unknown step in the chain, and the obstacle
+turned out not to be the one research/pynq-on-zcu102.md predicted.
+
+**PYNQ ships source-only.** `pip download pynq==3.0.1 --only-binary=:all:
+--platform manylinux2014_aarch64` returns *"from versions: none"* — there is no
+aarch64 wheel, for any PYNQ release.
+
+**And the sdist cannot build on our image.** On aarch64 `setup.py` shells out to
+`make` for five C libraries (`libdisplayport`, `libxhdmi`, `libaudio`, `libiic`,
+`libpcam5c`). `rootfs.manifest` contains `libgcc1` and nothing else: no gcc, no
+make, no python3-dev. The install dies at the build step and no amount of
+pre-downloading helps.
+
+**None of that native code is on our path.** Three facts, read out of the
+source:
+
+- `ext_modules` is non-empty **only on armv7l** — that is Zynq-7000's
+  `pynq.lib._video`. On aarch64 it is already `[]`.
+- The five libraries are HDMI, DisplayPort, audio, IIC and PCam drivers, all
+  under `pynq/lib/`, and **`pynq/__init__.py` never imports `pynq.lib`**.
+- `deploy/driver_base.py` imports exactly `Overlay`, `allocate` and `ps.Clocks`.
+  The only modules on that path that open a shared library at all are
+  `pynq.buffer` and `pynq.pl_server.xrt_device`, and both want `libc.so.6`. XRT
+  is reached through `pynq/_3rdparty/xrt.py` — a **vendored ctypes binding**, not
+  a compiled extension — against the `xrt` package already in the rootfs.
+
+So PYNQ is pure Python once `ext_modules` is empty, which it is on any non-armv7l
+build host. The only thing forcing a platform-tagged wheel is
+`BinaryDistribution.has_ext_modules` returning `True` unconditionally. Return
+`False` and `setup.py bdist_wheel` on the x86 host produces
+**`pynq-3.0.1-py3-none-any.whl`**, installable on the board with no toolchain.
+Build it with python 3.11 — `setup.py` imports `distutils`, which 3.12 removed.
+
+**`IPython` is an undeclared dependency and will stop the import.**
+`pynq.overlay` imports `pynqmetadata.frontends`, which imports
+`.visualisations`, which imports `IPython.display` at module scope —
+`pynqmetadata` 0.1.2 does not list it. Symptom is `ModuleNotFoundError: No
+module named 'IPython'`, which looks nothing like a PYNQ problem. Name it on the
+install line.
+
+Two pins, both load-bearing: **`pydantic<2`**, because `pynqmetadata` 0.1.2 is
+written against the v1 API (`class Config`, `.dict()`), and **`numpy<2`** to
+match the rest of the project.
+
+**Verified on the host under python 3.9** (the board's version, from
+`rootfs.manifest`): the wheel holds no `.so`, `import pynq` succeeds, and
+`Overlay`, `allocate` and `Clocks` all import. It ends at `No devices found, is
+the XRT environment sourced?` with `Device.devices == []` — correct on a machine
+with no XRT, and exactly the symptom to expect on the board if the zocl node or
+CMA is missing. Note PYNQ **warns rather than raises**: the failure surfaces one
+line later, as an `IndexError` on `Device.devices[0]` in `run_on_board.py`.
+
+The bundle is `/home/alex/pynq_offline` (92 MB, the wheel + 31 dependency
+wheels + the patch), copied to `/home/root/pynq_offline` by `mksd.sh`. A
+`--dry-run` install against the board's platform tags resolves all 32 packages
+with `--no-index`.
+
+**Still untested:** that `Device.devices` is non-empty on real hardware. That is
+now the only unknown left in the install.
+
+Accepted tradeoff: this is a modified PYNQ. Anything that later wants
+`pynq.lib.video`, `pynq.lib.audio` or the PCam driver fails at import and would
+need the toolchain route instead — `petalinux-config -c rootfs` → Image Features
+→ `tools-sdk`, then the unmodified sdist.
+
 ## 12. The camera, on the host — 2026-09-10
 
 First measurements against real hardware in this chain. All of it is host-side

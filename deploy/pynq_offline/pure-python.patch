@@ -1,0 +1,16 @@
+--- /tmp/o/pynq-3.0.1/setup.py	2022-10-22 03:38:04.000000000 +0300
++++ /tmp/claude-1000/-home-alex-Repos-drone-detect/ce62f694-6cbc-4ccd-8410-8ae3deb19fcf/scratchpad/p/pynq-3.0.1/setup.py	2026-09-21 14:57:35.646767749 +0300
+@@ -89,7 +89,12 @@
+ # Enforce platform-dependent distribution
+ class BinaryDistribution(Distribution):
+     def has_ext_modules(self):
+-        return True
++        # Patched for the ZCU102 image, which ships no compiler. On aarch64 the
++        # only native code is the five make-built libraries in pynq/lib (HDMI,
++        # DisplayPort, audio, IIC, PCam) -- ext_modules is already empty for
++        # anything but armv7l. Returning False makes the wheel py3-none-any, so
++        # it can be built on the host and installed on the board as pure Python.
++        return False
+ 
+ 
+ # Extend pynq package files with Microblaze C BSPs and libraries
