@@ -116,12 +116,21 @@ Key facts, all detailed in [build_notes.md](.claude/docs/build_notes.md):
      `CONFIG_USB_DWC3_DUAL_ROLE` (host-only does not link on Xilinx 5.15).
    - `deploy/run_on_board.py` compares real INT21 against a 60-frame golden set
      from the simulation, in LSB units. Tolerance 0.05 LSB — a real error is 1.0,
-     float32 noise at these magnitudes is ~0.008. Positive and negative controls
-     both pass on the host.
-9. **NEXT, blocked on hardware arriving:** `pip install pynq` over the built XRT
-   (no official PYNQ image exists for ZCU102 — the one genuinely unknown step),
-   write the card with `deploy/petalinux/mksd.sh`, boot, then run
-   `run_on_board.py`. After that: real FPS and power under load.
+     float32 noise at these magnitudes is ~0.008. `--self-test` runs both
+     controls on the host with no board: 0.000 and 0.998 LSB.
+8b. **PYNQ is solved, and `deploy/` now carries everything — 2026-09-22.** There
+   is no official PYNQ image for the ZCU102 and the sdist cannot build on ours
+   (no compiler in the rootfs), but none of pynq's native code is on our path,
+   so it is rebuilt as a **pure-Python wheel** on the host. The image also gained
+   the `zocl` node and `cma=512M`, without which XRT never comes up. Everything
+   the board needs — bitstream, driver, golden set, offline PYNQ, boot files —
+   now lives in `deploy/` and is committed; `rootfs.tar.gz` (73 MB) is the one
+   gitignored exception. build_notes §11.10.
+9. **NEXT, blocked on hardware arriving:** write the card with
+   `deploy/petalinux/mksd.sh /dev/sdX --yes`, boot, install PYNQ from
+   `deploy/pynq_offline/`, then run `run_on_board.py`. The one genuinely unknown
+   step left is whether `Device.devices` comes back non-empty on real silicon.
+   After that: real FPS and power under load.
 
 6. **The whole YOLOv5 line was removed 2026-08-20** — vendored `yolov5/`, its
    QAT and export scripts, and the `pico` / `n_eighth` / `relu` configs. It had
@@ -276,9 +285,13 @@ Key facts, all detailed in [build_notes.md](.claude/docs/build_notes.md):
   `evaluate.py`), `export/` (`export_qonnx.py` `verify_qonnx.py`
   `check_join_scales.py` `finn_transforms.py` `finn_build.py`
   `balance_folding.py` `verify_qonnx_v8.py` `verify_finn_steps.py`),
-  `deploy/` (`postprocess.py` `run_on_board.py` + `petalinux/` — the board's
-  Linux image). No vendored model code — `ultralytics` comes from `.venv/`.
-  `data/` + `runs/` are gitignored.
+  `deploy/` — **is** the board's `/home/root/deploy`: `resizer.bit/.hwh`,
+  `driver_base.py`, trimmed `finn/` + `qonnx/`, `inputs.npz` + `out_hw.npz`,
+  `postprocess.py` `run_on_board.py` `track.py`, `pynq_offline/` (the wheel and
+  31 aarch64 wheels), `boot/` (BOOT.BIN, image.ub, boot.scr, the .xsa), and
+  `petalinux/` (builds the image, host side). See `deploy/README.md`.
+  No vendored model code — `ultralytics` comes from `.venv/`.
+  `data/` + `runs/` are gitignored, as is `deploy/boot/rootfs.tar.gz`.
 
 ## Gotchas / notes
 - **conda shell warning:** the user's shell has `VIRTUAL_ENV=~/anaconda3`
