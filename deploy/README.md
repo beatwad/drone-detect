@@ -21,19 +21,18 @@ lands on the card.
 | `boot/` | `BOOT.BIN`, `image.ub`, `boot.scr` for the FAT32 partition, `rootfs.tar.gz` for the ext4 one, and the `.xsa` the image was built from |
 | `petalinux/` | how that image is built, on the host |
 
-## Two files are here but not in git
+## The one file here that is not in git
 
-Both are over the 50 MB commit cap, so they are **gitignored yet present in the
-working tree** — nothing this project needs lives outside the project. A fresh
-clone will not have them:
+**`boot/rootfs.tar.gz`, 73 MB** — over the 50 MB commit cap, so it is
+gitignored yet present in the working tree. Nothing this project needs lives
+outside the project, but a fresh clone will not have this one. Rebuild it from
+`petalinux/` with `boot/drone_v8.xsa` as the input — which is why the `.xsa` is
+committed although nothing at runtime wants it — or point `mksd.sh` at a copy
+with `ROOTFS=`.
 
-| | |
-|---|---|
-| `boot/rootfs.tar.gz` | 73 MB. Needed to write a card. Rebuild it from `petalinux/` with `boot/drone_v8.xsa` as the input — which is why the `.xsa` is committed although nothing at runtime wants it. `mksd.sh` takes `ROOTFS=` to point elsewhere |
-| `pynq_offline/pynq-3.0.1.tar.gz` | 60 MB. Host-side only: the wheel beside it is what gets installed, and `pure-python.patch` rebuilds that wheel from this sdist. Re-downloadable from PyPI |
-
-`mksd.sh` leaves the sdist off the card for the same reason — the wheel is what
-the board installs.
+PYNQ's 60 MB upstream sdist is deliberately **not** kept: only the wheel built
+from it is ever installed, and PyPI has the sdist whenever that wheel needs
+rebuilding. See `pynq_offline/README.md`.
 
 ## Write the card
 

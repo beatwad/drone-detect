@@ -6,8 +6,10 @@ so on the card it is `/home/root/deploy/pynq_offline` (minus the sdist).
 
     pynq-3.0.1-py3-none-any.whl   what to install: a pure-Python PYNQ
     pure-python.patch             the one-line change that makes it pure Python
-    pynq-3.0.1.tar.gz             the upstream sdist -- gitignored, 60 MB, host only
     wheels/                       31 dependencies, cp39 / manylinux2014_aarch64
+
+The upstream sdist is not kept: it is 60 MB, only the wheel is ever installed,
+and PyPI has it whenever the wheel needs rebuilding.
 
 ## Install
 
@@ -57,6 +59,7 @@ with no toolchain.
 To rebuild it:
 
 ```bash
+pip download pynq==3.0.1 --no-deps --no-binary :all:
 tar xzf pynq-3.0.1.tar.gz && cd pynq-3.0.1
 patch -p1 < ../pure-python.patch
 uv run --no-project --python 3.11 --with setuptools --with wheel \
