@@ -34,12 +34,89 @@ PYNQ's 60 MB upstream sdist is deliberately **not** kept: only the wheel built
 from it is ever installed, and PyPI has the sdist whenever that wheel needs
 rebuilding. See `pynq_offline/README.md`.
 
-## Write the card
+## Bring-up, start to finish
+
+Nothing here needs Vivado, FINN or PetaLinux. The card is written with ordinary
+utilities and the bitstream is loaded on the board by `pynq.Overlay`.
+
+### 1. On the host
 
 ```bash
-./deploy/petalinux/mksd.sh /dev/sdX          # dry run, changes nothing
-./deploy/petalinux/mksd.sh /dev/sdX --yes    # erases the card and writes it
+sudo apt install parted gdisk dosfstools e2fsprogs screen
 ```
+
+`mksd.sh` uses `sgdisk` (gdisk), `parted`, `mkfs.vfat` (dosfstools) and
+`mkfs.ext4` (e2fsprogs); `screen` is for the serial console. `uv sync` is *not*
+required — it is only needed for `--self-test` below, and it pulls torch.
+
+### 2. Write the card
+
+```bash
+lsblk -d -o NAME,SIZE,TYPE,RM,MODEL        # find the card, check RM=1
+./deploy/petalinux/mksd.sh /dev/sdX        # dry run, changes nothing
+./deploy/petalinux/mksd.sh /dev/sdX --yes  # erases the card and writes it
+```
+
+The dry run prints every file it would write. `--yes` repartitions and asks for
+`ERASE` before touching anything.
+
+### 3. Jumpers, boot mode, console
+
+The table is in the top-level README §9 and the reasoning in build_notes §11.9.
+The short version: **SW6 [4:1] = off, off, off, on** (only SW6-3 and SW6-4 move
+from the factory QSPI32 default), **J7 OPEN → ON** and **J110 1-2 → 2-3** for
+USB host, everything else unchanged. Console is the CP2108 on J83:
+
+```bash
+screen /dev/ttyUSB0 115200
+```
+
+Log in as `root`. Leave the camera unplugged for the first boot.
+
+### 4. Check the image came up right
+
+Three things, each of which breaks everything downstream silently:
+
+```bash
+grep -o 'cma=512M' /proc/cmdline   # CMA reserved for XRT's buffers
+ls /dev/dri/                       # renderD128 -- this is zocl
+lsmod | grep zocl                  # if empty: modprobe zocl
+xbutil examine                     # XRT should see a device
+```
+
+`renderD128` is the one that matters: without it PYNQ finds no device, and the
+symptom reads like a Python problem. Nothing needs sourcing — this image has
+XRT in `/usr/lib`.
+
+### 5. Install PYNQ
+
+```bash
+cd /home/root/deploy/pynq_offline
+pip3 install --no-index --find-links wheels pynq-3.0.1-py3-none-any.whl ipython
+python3 -c "import pynq; print(pynq.__version__, pynq.Device.devices)"
+```
+
+The device list must be **non-empty**. Empty, with `No devices found, is the XRT
+environment sourced?`, means step 4 — not PYNQ.
+
+### 6. Run it
+
+```bash
+cd /home/root/deploy && python3 run_on_board.py
+```
+
+60 frames through the real accelerator, compared against the simulation in LSB.
+The honest expectation is `max |delta| LSB  0.000000e+00` and `PASS`.
+
+### If it goes wrong
+
+| Symptom | Cause |
+|---|---|
+| No console output at all | SW6 — the factory default is QSPI32, not SD |
+| `IndexError` on `Device.devices[0]` | zocl did not come up; step 4 |
+| `ModuleNotFoundError: No module named 'IPython'` | `ipython` left off the install line |
+| Camera enumerates at 480M, not 5000M | J7/J110, or a micro-AB adapter with no SuperSpeed lanes |
+| `FAIL` on the comparison | that is the result: hardware disagrees with the simulated graph |
 
 ## Check the harness without a board
 
