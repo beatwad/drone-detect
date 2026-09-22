@@ -998,14 +998,17 @@ keying on a leading `/` drops it. Without it, instantiation succeeds but child-I
 generation fails on `MVAU_rtl_*_wstrm` (the weight-stream source). That single
 symlink was the last blocker.
 
-Harness: `/home/alex/finn_build_mdanilow/zynq_retry/` (`ip_config_v4.tcl` is the
-working one, `run.sh` + `inner.sh` drive it). **Iterate here, not through FINN** —
+Harness: the zynq shell assembly in the build directory (`ip_config_*.tcl`,
+driven by `run.sh` + `inner.sh`; `zynq_drone/` has the shipping set).
+**Iterate there, not through FINN** —
 the zynq shell assembly is minutes while the 24 h of stitches persist on disk, so
 five diagnostic attempts fit in under an hour.
 
 ### 10.7 GROUND TRUTH #2: a DSP-based design estimates ×1.44, not ×2.73
-First real bitstream in this project, `zynq_retry/finn_zynq_link.runs/impl_1/top_wrapper.bit`
-(26.5 MB, 2026-08-12), pruned reference YOLOv8n W4A4 @ 90 FPS target, XCZU9EG.
+First real bitstream in this project (26.5 MB, 2026-08-12), pruned reference
+YOLOv8n W4A4 @ 90 FPS target, XCZU9EG. **Its build tree was deleted
+2026-09-22** — it had been superseded by our own detector (§10.16) and the
+table below is the whole of what it was kept for.
 
 | resource | **real (post-route)** | % ZCU102 | FINN estimate | ratio |
 |---|---|---|---|---|
