@@ -1687,10 +1687,11 @@ with no XRT, and exactly the symptom to expect on the board if the zocl node or
 CMA is missing. Note PYNQ **warns rather than raises**: the failure surfaces one
 line later, as an `IndexError` on `Device.devices[0]` in `run_on_board.py`.
 
-The bundle is `/home/alex/pynq_offline` (92 MB, the wheel + 31 dependency
-wheels + the patch), copied to `/home/root/pynq_offline` by `mksd.sh`. A
-`--dry-run` install against the board's platform tags resolves all 32 packages
-with `--no-index`.
+The bundle is `deploy/pynq_offline` (32 MB, the wheel + 31 dependency wheels +
+the patch), which rides to the board inside `deploy/`. A `--dry-run` install
+against the board's platform tags resolves all 32 packages with `--no-index`.
+The 60 MB upstream sdist is not kept — only the wheel is installed, and the
+rebuild recipe re-downloads it.
 
 **Still untested:** that `Device.devices` is non-empty on real hardware. That is
 now the only unknown left in the install.
