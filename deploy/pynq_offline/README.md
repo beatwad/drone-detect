@@ -1,17 +1,18 @@
 # Offline PYNQ 3.0.1 for the ZCU102 image
 
 Assembled on the host 2026-09-21 so the board needs no network and no compiler.
-`deploy/petalinux/mksd.sh` copies this whole directory to `/home/root/pynq_offline`.
+`deploy/petalinux/mksd.sh` carries this directory to the board inside `deploy/`,
+so on the card it is `/home/root/deploy/pynq_offline` (minus the sdist).
 
     pynq-3.0.1-py3-none-any.whl   what to install: a pure-Python PYNQ
     pure-python.patch             the one-line change that makes it pure Python
-    pynq-3.0.1.tar.gz             the upstream sdist the wheel was built from
+    pynq-3.0.1.tar.gz             the upstream sdist -- gitignored, 60 MB, host only
     wheels/                       31 dependencies, cp39 / manylinux2014_aarch64
 
 ## Install
 
 ```bash
-cd /home/root/pynq_offline
+cd /home/root/deploy/pynq_offline
 pip3 install --no-index --find-links wheels pynq-3.0.1-py3-none-any.whl ipython
 ```
 

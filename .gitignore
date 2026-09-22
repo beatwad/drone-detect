@@ -24,3 +24,9 @@ kaggle.json
 .DS_Store
 *.log
 *.cache
+
+# --- board artifacts kept in-tree but NOT committed (over the 50 MB cap) ---
+# Both are needed to write a card / rebuild the wheel, so they live in deploy/
+# rather than outside the project. See deploy/README.md.
+/deploy/boot/rootfs.tar.gz
+/deploy/pynq_offline/pynq-3.0.1.tar.gz

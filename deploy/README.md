@@ -18,19 +18,22 @@ lands on the card.
 | `v8n_p3_w4a4_192x320_dequant.npz` | per-channel scale and bias; **changes on every rebuild** |
 | `track.py` | seed → IoU cluster → WBF → Kalman → centring gate. Never run on a real detection |
 | `pynq_offline/` | a pure-Python PYNQ 3.0.1 and its aarch64 wheels, so the board needs neither network nor compiler. See its README |
-| `boot/` | `BOOT.BIN`, `image.ub`, `boot.scr` for the FAT32 partition, and the `.xsa` the image was built from |
+| `boot/` | `BOOT.BIN`, `image.ub`, `boot.scr` for the FAT32 partition, `rootfs.tar.gz` for the ext4 one, and the `.xsa` the image was built from |
 | `petalinux/` | how that image is built, on the host |
 
-## The one file that is not here
+## Two files are here but not in git
 
-**`rootfs.tar.gz` (73 MB) is too large to commit.** `mksd.sh` reads it from
-`/home/alex/petalinux/projects/drone/images/linux/` by default; override with
-`ROOTFS=/path/to/rootfs.tar.gz`. If it is ever lost it can be rebuilt from
-`petalinux/` with `boot/drone_v8.xsa` as the input — which is why the `.xsa` is
-committed even though nothing at runtime needs it.
+Both are over the 50 MB commit cap, so they are **gitignored yet present in the
+working tree** — nothing this project needs lives outside the project. A fresh
+clone will not have them:
 
-`pynq_offline/` similarly omits the 60 MB upstream sdist; the wheel built from
-it is what gets installed, and `pure-python.patch` reproduces the build.
+| | |
+|---|---|
+| `boot/rootfs.tar.gz` | 73 MB. Needed to write a card. Rebuild it from `petalinux/` with `boot/drone_v8.xsa` as the input — which is why the `.xsa` is committed although nothing at runtime wants it. `mksd.sh` takes `ROOTFS=` to point elsewhere |
+| `pynq_offline/pynq-3.0.1.tar.gz` | 60 MB. Host-side only: the wheel beside it is what gets installed, and `pure-python.patch` rebuilds that wheel from this sdist. Re-downloadable from PyPI |
+
+`mksd.sh` leaves the sdist off the card for the same reason — the wheel is what
+the board installs.
 
 ## Write the card
 

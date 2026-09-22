@@ -8,9 +8,10 @@
 #   p1  1 GB  FAT32  BOOT   BOOT.BIN, image.ub, boot.scr
 #   p2  rest  ext4   root   rootfs.tar.gz unpacked, + deploy/ in /home/root
 #
-# Everything this writes comes from the repository except the root filesystem:
-# rootfs.tar.gz is 73 MB and does not belong in git. Point ROOTFS at it, or
-# rebuild it from deploy/petalinux/ (boot/drone_v8.xsa is the input).
+# Everything this writes lives in deploy/. boot/rootfs.tar.gz is 73 MB, so it is
+# gitignored rather than committed -- present in a working tree, absent from a
+# fresh clone. Rebuild it from deploy/petalinux/ (boot/drone_v8.xsa is the
+# input), or point ROOTFS= at a copy.
 #
 # The bitstream is deliberately NOT in BOOT.BIN. The FINN driver loads it at
 # runtime through pynq.Overlay, so rebuilding the network is a file copy rather
@@ -22,14 +23,14 @@ GO="${2:-}"
 HERE=$(dirname "$(readlink -f "$0")")
 DEPLOY=$(dirname "$HERE")          # deploy/ -- exactly what lands in /home/root
 BOOT="$DEPLOY/boot"
-ROOTFS="${ROOTFS:-/home/alex/petalinux/projects/drone/images/linux/rootfs.tar.gz}"
+ROOTFS="${ROOTFS:-$BOOT/rootfs.tar.gz}"
 
 [ -b "$DEV" ] || { echo "usage: $0 /dev/sdX [--yes]   (block device required)"; exit 1; }
 case "$DEV" in /dev/sda|/dev/sdb|/dev/sdc|/dev/nvme*) echo "REFUSING: $DEV looks like a system disk."; exit 1;; esac
 for f in BOOT.BIN image.ub boot.scr; do
     [ -f "$BOOT/$f" ] || { echo "missing $BOOT/$f"; exit 1; }
 done
-[ -f "$ROOTFS" ] || { echo "missing $ROOTFS -- set ROOTFS=/path/to/rootfs.tar.gz"; exit 1; }
+[ -f "$ROOTFS" ] || { echo "missing $ROOTFS -- gitignored, see deploy/README.md; or set ROOTFS="; exit 1; }
 for f in run_on_board.py resizer.bit resizer.hwh driver_base.py inputs.npz out_hw.npz; do
     [ -f "$DEPLOY/$f" ] || { echo "missing $DEPLOY/$f"; exit 1; }
 done
@@ -63,9 +64,11 @@ sudo umount "$M"
 sudo mount "${DEV}2" "$M"
 sudo tar xzf "$ROOTFS" -C "$M"
 sudo mkdir -p "$M/home/root/deploy"
-# deploy/ minus the two host-side directories: petalinux/ builds the image, and
-# boot/ has already gone to p1. Everything else is board-side by construction.
+# deploy/ minus the two host-side directories -- petalinux/ builds the image,
+# boot/ has already gone to p1 -- and minus the PYNQ sdist, which is only there
+# to rebuild the wheel. Everything else is board-side by construction.
 sudo tar -C "$DEPLOY" --exclude=./petalinux --exclude=./boot --exclude=__pycache__ \
+         --exclude=./pynq_offline/pynq-3.0.1.tar.gz \
          -cf - . | sudo tar -C "$M/home/root/deploy" -xf -
 sudo sync
 sudo umount "$M"
