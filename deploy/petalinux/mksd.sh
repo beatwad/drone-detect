@@ -26,7 +26,8 @@ BOOT="$DEPLOY/boot"
 ROOTFS="${ROOTFS:-$BOOT/rootfs.tar.gz}"
 
 [ -b "$DEV" ] || { echo "usage: $0 /dev/sdX [--yes]   (block device required)"; exit 1; }
-case "$DEV" in /dev/sda|/dev/sdb|/dev/sdc|/dev/nvme*) echo "REFUSING: $DEV looks like a system disk."; exit 1;; esac
+[ "$(cat /sys/block/"$(basename "$DEV")"/removable 2>/dev/null)" == "1" ] \
+    || { echo "REFUSING: $DEV is not a removable disk (pass the whole device, e.g. /dev/sdX)."; exit 1; }
 for f in BOOT.BIN image.ub boot.scr; do
     [ -f "$BOOT/$f" ] || { echo "missing $BOOT/$f"; exit 1; }
 done
