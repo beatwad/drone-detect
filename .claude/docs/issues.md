@@ -172,6 +172,10 @@ FINN's cycle estimate predicted. DMA is not it (~7 MB/s). Either a layer is
 slower than `estimate_layer_cycles` says, or FIFO back-pressure throttles the
 pipeline. Power under load is still only the Vivado report (5.10 W, PS8 2.74 W).
 
+Worked in [accelerator_diagnosis.md](accelerator_diagnosis.md): the board-side
+loop, what is excluded, five ranked hypotheses and the steps to test them on
+the PC that holds the build tree.
+
 **Solved when:** the slow stage is named (`RTLSIM_PERFORMANCE` on the stitched
 IP, or per-layer counters) and either fixed or accepted with a number, and board
 power is measured under a continuous frame stream.

@@ -10,6 +10,9 @@ Full source docs live in [.claude/docs/](.claude/docs/):
 - [build_notes.md](.claude/docs/build_notes.md) — **everything measured about QAT →
   QONNX → FINN → bitstream.** Read this before touching `qat/`, `export/`, or
   running a FINN build; it is where all the hard-won toolchain detail lives.
+- [accelerator_diagnosis.md](.claude/docs/accelerator_diagnosis.md) — why the PL
+  runs 2.4× slower than FINN estimated: loop, exclusions, ranked hypotheses, and
+  the steps to run on the old PC where the build tree lives.
 - [issues.md](.claude/docs/issues.md) — open problems, each with what "solved"
   would look like. The unglamorous list: no real footage yet, no lens, no
   trigger, USB where MIPI belongs.
