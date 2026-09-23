@@ -1991,3 +1991,89 @@ target is hardest, against a cluttered ground background.
 shown to do anything: `Zoom, Absolute` 100–200 (1–2×), `Pan/Tilt, Absolute`
 ±648000 arcsec in 3600 (1°) steps, and a `Region of Interest Auto Ctrls` flag.
 Enumerated only — no behaviour measured. See issues §2.
+
+### 12.7 Which modes crop the sensor and which scale it — 2026-09-23
+
+Measured, not assumed: one YUYV frame per mode of a static, detailed scene, each
+fitted onto the 1920×1200 frame with SIFT + RANSAC (similarity transform).
+Run twice — first by accident on a USB 2.0 port (every mode capped at 10 fps),
+then on SuperSpeed at each mode's real rate (80 / 120 / 200). **Identical to
+the pixel**, so no mode switches to binning or skipping at high frame rates.
+Residuals 0.14–0.54 px, rotation ≤0.03°:
+
+| mode | scale | window on the 1920×1200 sensor (x, y) | what it is |
+|---|---|---|---|
+| 1920×1200 | 1 | 0–1920, 0–1200 | full sensor |
+| 1920×1080 | 1 | 0–1920, 60–1140 | crop |
+| 1600×1200 | 1 | 160–1760, 0–1200 | crop |
+| 1280×960 | **1.25** | 160–1760, 0–1200 | the 1600×1200 window, scaled down |
+| **1280×720** (@120 and @200) | **1** | **316–1596, 236–956** | **native crop** |
+| 640×480 | **1.5** | 476–1436, 235–956 | a 960×720 window, scaled down |
+| 512×512 | 1 | 704–1216, 343–856 | crop |
+
+**1280×720 is a native-resolution window, not a downscale.** So a 320×192 centre
+crop of a 720p frame is the same pixels as one cut from 1920×1200 — at 200 fps
+instead of 80, and 2.5× less USB traffic (1.84 MB vs 4.61 MB a frame). That is
+the camera-side ROI of CLAUDE.md open question 1, already built into the mode
+list, and it is also the one mode whose letterboxed shape matches the bitstream
+(§12.5). 512×512 is a native crop too, and exactly centred.
+
+**720p "@200" really runs at ~249 fps.** DQBUF'ing every frame: median interval
+4.013 ms, **0 of 370 frames identical to the one before** — sensor noise makes
+real frames differ, so there are no duplicates. §12.6's "faster than nominal"
+question is closed: it is real. (512×512 @120: 8.251 ms, also clean.)
+
+**720p gives fresher frames than 512×512, despite 3.5× the bytes** — measured
+with `deploy/capture.py` on the host, age = CLOCK_MONOTONIC now − driver buffer
+timestamp at `read()`: **6.4–6.7 ms at 720p @200 vs 10.8–11.6 ms at 512×512
+@120.** The paper estimate (transfer time dominates, so the smaller mode wins)
+was wrong: the camera evidently sends each frame at the pace of sensor readout,
+so the frame period sets the age. `capture.py` defaults to 1280×720 @200.
+
+The windows are **not exactly centred**: 720p sits at (316, 235), not the ideal
+(320, 240) — ~4–5 px off. Irrelevant for detection, but boresight is not
+"centre of the frame" to better than that; calibrate it with the lens.
+
+Throwaway harness (not in the repo): OpenCV capture per mode, 60 frames to
+settle exposure, `SIFT_create` + ratio test + `estimateAffinePartial2D`.
+
+### 12.8 The live chain on the board — 2026-09-23
+
+`deploy/live.py`: camera → `capture.py` → accelerator → `decode_confident` →
+`track.update`, on the ZCU102 with the camera in J96 at SuperSpeed.
+
+**Capture without OpenCV.** The board has no cv2, so `capture.py` drives V4L2
+directly (`fcntl.ioctl` on 64-bit struct layouts, `mmap` buffers, a thread that
+DQBUFs, copies the raw 320×192 window out and requeues at once, keeping only the
+newest frame). The capture-mode numbers of §12.7 reproduce on the board.
+
+**YUYV → RGB was the surprise.** §12.6 estimated ~0.25 ms on an A53 from a
+desktop OpenCV timing. The NumPy version measured **14.7 ms**; rewritten as
+256-entry tables with chroma applied per pixel pair, still **13.1 ms** — NumPy's
+indexed gathers are what is slow on the A53, and no reshuffling fixes that.
+`deploy/yuyv.c`, cross-compiled with Vitis 2022.2's `aarch64-linux-gnu-gcc`
+(`-nostdlib`, so no glibc dependency) and called through ctypes: **1.61 ms**.
+All three are bit-exact with OpenCV's `COLOR_YUV2RGB_YUYV`, checked over all
+16.7M (Y, U, V) combinations; NumPy stays as the fallback where the `.so` does
+not load.
+
+**The loop, 600 live frames**, ms:
+
+| stage | median | p95 | max |
+|---|---|---|---|
+| wait frame (incl. YUYV → RGB) | 1.52 | 1.83 | 1.93 |
+| accelerator (`execute`: pack + PL + unpack) | 50.49 | 50.92 | 51.23 |
+| `decode_confident` | 1.65 | 2.15 | 3.50 |
+| `track.update` | 0.12 | 0.18 | 1.74 |
+| **age at aim** (now − driver timestamp) | **64.62** | 78.99 | 85.26 |
+
+≈53.8 ms a cycle, **~18.6 FPS** (13.1 ms conversion: 75 ms, ~15.5 FPS). The
+accelerator stage is now ~80% of the loop and ~78% of the age, so issues §9 —
+the gap to FINN's estimate — is where further latency lives. The camera
+delivers ~249 fps and we consume ~19, so ~93% of frames are skipped by design:
+newest frame only.
+
+`age at aim` starts at the driver timestamp — after exposure and part of
+readout — so it is a lower bound on glass-to-aim until there is a hardware
+trigger (issues §4). The scene had no drone: 0 boxes throughout, as it should.
+

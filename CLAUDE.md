@@ -133,8 +133,14 @@ Key facts, all detailed in [build_notes.md](.claude/docs/build_notes.md):
    (`postprocess.decode_confident`, 10.8 → 1.7 ms, exact). **Buffer in → aim
    out: 56.2 ms median**, of which PL 42.3 ms; camera and crop not included.
    Board login: `petalinux` / `root`, then `sudo -i`.
-10. **NEXT:** find why steady state is 26.2 ms/frame rather than 11 ms (issues
-   §9), and measure board power under load.
+10. **Live camera on the board — DONE 2026-09-23**, build_notes §12.7–12.8.
+   `deploy/live.py` runs camera → accelerator → decode → tracker: **~18.6 FPS,
+   64.6 ms median from driver timestamp to aim** (p95 79). Capture is 1280×720
+   @200 YUYV (a native sensor crop, really ~249 fps), centre 320×192, converted
+   in C (`libyuyv.so`, 1.6 ms; NumPy was 13 ms). Nothing has seen a real drone.
+11. **NEXT:** the accelerator is now ~80% of the loop — find why steady state is
+   26.2 ms/frame and latency 42 ms rather than 11 (issues §9); measure board
+   power under load; point the camera at a drone.
 
 6. **The whole YOLOv5 line was removed 2026-08-20** — vendored `yolov5/`, its
    QAT and export scripts, and the `pico` / `n_eighth` / `relu` configs. It had
@@ -291,7 +297,8 @@ Key facts, all detailed in [build_notes.md](.claude/docs/build_notes.md):
   `balance_folding.py` `verify_qonnx_v8.py` `verify_finn_steps.py`),
   `deploy/` — **is** the board's `/home/root/deploy`: `resizer.bit/.hwh`,
   `driver_base.py`, trimmed `finn/` + `qonnx/`, `inputs.npz` + `out_hw.npz`,
-  `postprocess.py` `run_on_board.py` `track.py`, `pynq_offline/` (the wheel and
+  `postprocess.py` `run_on_board.py` `track.py` `capture.py` `live.py`
+  `libyuyv.so` (+ `yuyv.c`), `pynq_offline/` (the wheel and
   32 aarch64 wheels), `boot/` (BOOT.BIN, image.ub, boot.scr, the .xsa), and
   `petalinux/` (builds the image, host side). See `deploy/README.md`.
   No vendored model code — `ultralytics` comes from `.venv/`.

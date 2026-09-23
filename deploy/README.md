@@ -17,6 +17,9 @@ lands on the card.
 | `postprocess.py` | dequantize → DFL → boxes → sigmoid → NMS, NumPy only |
 | `v8n_p3_w4a4_192x320_dequant.npz` | per-channel scale and bias; **changes on every rebuild** |
 | `track.py` | seed → IoU cluster → WBF → Kalman → centring gate. Never run on a real detection |
+| `capture.py` | camera → centre 320×192 RGB window: V4L2 via ioctl + mmap, 1280×720 YUYV, newest frame only |
+| `yuyv.c`, `libyuyv.so` | the window's YUYV → RGB in C, cross-compiled for the A53 (build line in the `.c`); `capture.py` falls back to NumPy without it |
+| `live.py` | the whole chain: camera → accelerator → `decode_confident` → tracker, one status line a second |
 | `pynq_offline/` | a pure-Python PYNQ 3.0.1 and its aarch64 wheels, so the board needs neither network nor compiler. See its README |
 | `boot/` | `BOOT.BIN`, `image.ub`, `boot.scr` for the FAT32 partition, `rootfs.tar.gz` for the ext4 one, and the `.xsa` the image was built from |
 | `petalinux/` | how that image is built, on the host |
