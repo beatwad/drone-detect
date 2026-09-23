@@ -71,7 +71,10 @@ USB host, everything else unchanged. Console is the CP2108 on J83:
 screen /dev/ttyUSB0 115200
 ```
 
-Log in as `root`. Leave the camera unplugged for the first boot.
+Log in as `petalinux`, password `root` — root itself has no login (`*` in
+`/etc/shadow`). A fresh card has no password and forces one to be set at first
+login; this is the one we set. Everything below runs as root, so start with
+`sudo -i`. Leave the camera unplugged for the first boot.
 
 ### 4. Check the image came up right
 
@@ -85,19 +88,25 @@ xbutil examine                     # XRT should see a device
 ```
 
 `renderD128` is the one that matters: without it PYNQ finds no device, and the
-symptom reads like a Python problem. Nothing needs sourcing — this image has
-XRT in `/usr/lib`.
+symptom reads like a Python problem. XRT is in `/usr`, not `/opt/xilinx/xrt`, and
+there is no `setup.sh` to source — but PYNQ still needs `XILINX_XRT=/usr`, see
+step 5.
 
 ### 5. Install PYNQ
 
 ```bash
 cd /home/root/deploy/pynq_offline
-pip3 install --no-index --find-links wheels pynq-3.0.1-py3-none-any.whl ipython
+pip3 install --no-index --find-links wheels pynq-3.0.1-py3-none-any.whl ipython bitstring
+export XILINX_XRT=/usr
 python3 -c "import pynq; print(pynq.__version__, pynq.Device.devices)"
 ```
 
-The device list must be **non-empty**. Empty, with `No devices found, is the XRT
-environment sourced?`, means step 4 — not PYNQ.
+The device list must be **non-empty**. PYNQ imports its device classes *only if*
+`XILINX_XRT` is set, and then loads `$XILINX_XRT/lib/libxrt_core.so`; unset, it
+prints `No devices found, is the XRT environment sourced?` and returns `[]` even
+with zocl up. `run_on_board.py` sets it itself. Empty *with* it set means step 4.
+
+`bitstring` is for `finn/util/data_packing.py`, which imports it at module scope.
 
 ### 6. Run it
 
@@ -106,14 +115,30 @@ cd /home/root/deploy && python3 run_on_board.py
 ```
 
 60 frames through the real accelerator, compared against the simulation in LSB.
-The honest expectation is `max |delta| LSB  0.000000e+00` and `PASS`.
+It also creates `/lib/firmware`, where `pynq.Overlay` hands the bitstream to
+fpga_manager and which this image lacks. Measured 2026-09-23:
+
+```
+bitstream loaded, fclk = 100.0 MHz
+60 frames, per-frame execute(): median 86.61 ms ... -> 11.5 FPS (driver included)
+accelerator alone: runtime[ms] 42.29..., throughput[images/s] 23.64...
+  max |delta| LSB  0.000000e+00
+  elements off > 0.05 LSB   0 / 3744000
+PASS  hardware matches the simulated graph
+```
+
+`accelerator alone` is batch 1, i.e. **latency**, not throughput — build_notes
+§11.11.
 
 ### If it goes wrong
 
 | Symptom | Cause |
 |---|---|
 | No console output at all | SW6 — the factory default is QSPI32, not SD |
-| `IndexError` on `Device.devices[0]` | zocl did not come up; step 4 |
+| `IndexError` on `Device.devices[0]` | zocl did not come up (step 4), or `XILINX_XRT` unset (step 5) |
+| `No module named 'bitstring'` | `bitstring` left off the install line |
+| `No such file or directory: '/lib/firmware/resizer.bin'` | an old `run_on_board.py`; `mkdir -p /lib/firmware` |
+| `(ro)` after `mmcblk0` in the boot log, then `error -30` panic | the SD adapter's LOCK slider — the slot reads it as write-protected |
 | `ModuleNotFoundError: No module named 'IPython'` | `ipython` left off the install line |
 | Camera enumerates at 480M, not 5000M | J7/J110, or a micro-AB adapter with no SuperSpeed lanes |
 | `FAIL` on the comparison | that is the result: hardware disagrees with the simulated graph |

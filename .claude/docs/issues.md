@@ -147,7 +147,12 @@ quietly incomparable to the board unless capture is 1280×720.
 the preprocessing (crop, not resize — CLAUDE.md open question 1) produces it
 directly rather than by letterboxing whatever the camera happened to send.
 
-## 8. `pip install pynq` over the built XRT is unverified
+## 8. ~~`pip install pynq` over the built XRT is unverified~~ — SOLVED 2026-09-23
+
+`run_on_board.py` passed on hardware: 60 frames, 0 of 3,744,000 outputs off.
+It took two missing wheels, `XILINX_XRT=/usr` and `/lib/firmware`; build_notes
+§11.11. Kept below as it was.
+
 
 The one genuinely unknown step in board bring-up: no official PYNQ image exists
 for ZCU102, so PYNQ goes on top of our own PetaLinux 2022.2 image. Everything
@@ -159,14 +164,17 @@ host. See [research/pynq-on-zcu102.md](research/pynq-on-zcu102.md).
 **Solved when:** `run_on_board.py` compares real INT21 against the 60-frame
 golden set on hardware and passes at 0.05 LSB.
 
-## 9. Real FPS and power under load are unmeasured
+## 9. Real throughput is 2.4× below FINN's estimate, and power is unmeasured
 
-Every throughput and power number for the accelerator is an estimate or a
-Vivado report (5.10 W, of which PS8 2.74 W). Nothing has run on hardware under
-a real frame stream. The host-side 120+ FPS figures in build_notes §12 say
-nothing about the board — different device, different input path.
+**Measured 2026-09-23** (build_notes §11.11): single-frame latency ≈ 42 ms,
+steady-state ≈ 26.2 ms/frame ≈ **38 FPS** at 100 MHz — against the **90.4 FPS**
+FINN's cycle estimate predicted. DMA is not it (~7 MB/s). Either a layer is
+slower than `estimate_layer_cycles` says, or FIFO back-pressure throttles the
+pipeline. Power under load is still only the Vivado report (5.10 W, PS8 2.74 W).
 
-**Blocked on:** §8.
+**Solved when:** the slow stage is named (`RTLSIM_PERFORMANCE` on the stitched
+IP, or per-layer counters) and either fixed or accepted with a number, and board
+power is measured under a continuous frame stream.
 
 ## 10. The deployment part is undecided, and BRAM is the constraint
 

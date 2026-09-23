@@ -22,13 +22,11 @@ Full source docs live in [.claude/docs/](.claude/docs/):
 `FINN → bitstream` → `PYNQ deployment`. Everything up to and including QONNX
 export is **board-agnostic** and done on the host GPU.
 
-**Where we are: the whole host side is done and verified; we are waiting on
-hardware.** As of 2026-08-19 the detector is a bitstream, the driver exists, the
-numeric path from PyTorch to the built graph is checked end to end, and a ZCU102
-Linux image is built and inspected. The board itself is **not here yet** (on its
-way), so exactly one junction in the chain is untested: real hardware against the
-simulation. `deploy/run_on_board.py` performs that check in one command when it
-arrives.
+**Where we are: the detector runs on the ZCU102, bit-exact.** On 2026-09-23
+`deploy/run_on_board.py` passed on real hardware — 60 frames, 0 of 3,744,000
+INT21 outputs off the simulation — so every junction from PyTorch to silicon is
+now verified. Measured: ~42 ms single-frame latency, **~38 FPS steady state at
+100 MHz, 2.4× below FINN's 90.4 FPS estimate** (build_notes §11.11, issues §9).
 
 2026-08-15, yolov8n-P3
 ReLU6 W4A4 @ 192×320 built to `top_wrapper.bit` on ZCU102 — timing closed with
@@ -126,11 +124,17 @@ Key facts, all detailed in [build_notes.md](.claude/docs/build_notes.md):
    the board needs — bitstream, driver, golden set, offline PYNQ, boot files —
    now lives in `deploy/` and is committed; `rootfs.tar.gz` (73 MB) is the one
    gitignored exception. build_notes §11.10.
-9. **NEXT, blocked on hardware arriving:** write the card with
-   `deploy/petalinux/mksd.sh /dev/sdX --yes`, boot, install PYNQ from
-   `deploy/pynq_offline/`, then run `run_on_board.py`. The one genuinely unknown
-   step left is whether `Device.devices` comes back non-empty on real silicon.
-   After that: real FPS and power under load.
+9. **Board bring-up — DONE 2026-09-23**, build_notes §11.11. `run_on_board.py`
+   PASSES bit-exact. Needed on the way: `exceptiongroup` + `bitstring` wheels,
+   `XILINX_XRT=/usr` (PYNQ finds no device without it, even with zocl up),
+   `/lib/firmware` (absent from the image), and a NumPy INT21 unpack in
+   `deploy/finn/util/data_packing.py` (FINN's hex-string path: 25.6 s/frame,
+   ours 6.4 ms), and thresholding the class channel *before* DFL decode
+   (`postprocess.decode_confident`, 10.8 → 1.7 ms, exact). **Buffer in → aim
+   out: 56.2 ms median**, of which PL 42.3 ms; camera and crop not included.
+   Board login: `petalinux` / `root`, then `sudo -i`.
+10. **NEXT:** find why steady state is 26.2 ms/frame rather than 11 ms (issues
+   §9), and measure board power under load.
 
 6. **The whole YOLOv5 line was removed 2026-08-20** — vendored `yolov5/`, its
    QAT and export scripts, and the `pico` / `n_eighth` / `relu` configs. It had
@@ -288,7 +292,7 @@ Key facts, all detailed in [build_notes.md](.claude/docs/build_notes.md):
   `deploy/` — **is** the board's `/home/root/deploy`: `resizer.bit/.hwh`,
   `driver_base.py`, trimmed `finn/` + `qonnx/`, `inputs.npz` + `out_hw.npz`,
   `postprocess.py` `run_on_board.py` `track.py`, `pynq_offline/` (the wheel and
-  31 aarch64 wheels), `boot/` (BOOT.BIN, image.ub, boot.scr, the .xsa), and
+  32 aarch64 wheels), `boot/` (BOOT.BIN, image.ub, boot.scr, the .xsa), and
   `petalinux/` (builds the image, host side). See `deploy/README.md`.
   No vendored model code — `ultralytics` comes from `.venv/`.
   `data/` + `runs/` are gitignored, as is `deploy/boot/rootfs.tar.gz`.

@@ -132,6 +132,12 @@ def main():
     if args.self_test:
         return self_test(args.golden, args.dequant)
 
+    # PYNQ imports its device classes only if XILINX_XRT is set, then loads
+    # $XILINX_XRT/lib/libxrt_core.so. Unset, Device.devices is silently [].
+    os.environ.setdefault("XILINX_XRT", "/usr")
+    # Overlay hands the bitstream to fpga_manager via /lib/firmware, which this
+    # image does not have.
+    os.makedirs("/lib/firmware", exist_ok=True)
     from pynq.pl_server.device import Device
     from driver_base import FINNExampleOverlay
 

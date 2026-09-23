@@ -1690,19 +1690,115 @@ with no XRT, and exactly the symptom to expect on the board if the zocl node or
 CMA is missing. Note PYNQ **warns rather than raises**: the failure surfaces one
 line later, as an `IndexError` on `Device.devices[0]` in `run_on_board.py`.
 
-The bundle is `deploy/pynq_offline` (32 MB, the wheel + 31 dependency wheels +
+The bundle is `deploy/pynq_offline` (32 MB, the wheel + 32 dependency wheels +
 the patch), which rides to the board inside `deploy/`. A `--dry-run` install
-against the board's platform tags resolves all 32 packages with `--no-index`.
+under a real python 3.9 resolves all 33 packages with `--no-index`. The first
+check ran `--python-version 3.9` from python 3.11, which evaluates
+`python_version` markers against the host and so missed `exceptiongroup`; the
+board caught it on the first install, 2026-09-23. The exact command is in
+`pynq_offline/README.md`.
 The 60 MB upstream sdist is not kept — only the wheel is installed, and the
 rebuild recipe re-downloads it.
 
-**Still untested:** that `Device.devices` is non-empty on real hardware. That is
-now the only unknown left in the install.
+**Settled 2026-09-23:** `Device.devices` is non-empty on real hardware — once
+`XILINX_XRT=/usr` is set, see §11.11.
 
 Accepted tradeoff: this is a modified PYNQ. Anything that later wants
 `pynq.lib.video`, `pynq.lib.audio` or the PCam driver fails at import and would
 need the toolchain route instead — `petalinux-config -c rootfs` → Image Features
 → `tools-sdk`, then the unmodified sdist.
+
+### 11.11 On hardware: bit-exact, and slower than FINN predicted — 2026-09-23
+
+**`run_on_board.py` PASSES: 60 frames, 0 of 3,744,000 INT21 outputs off, max
+0.000 LSB.** The last untested junction — bitstream against the simulated graph —
+is closed. The driver, the packing and the dequantization are all right.
+
+Getting there took four fixes, none of which the host could have caught:
+
+| Symptom on the board | Cause | Fix |
+|---|---|---|
+| `error -30` (EROFS) mounting root, `mmcblk0 ... (ro)` | microSD→SD adapter's LOCK slider; the slot's WP pin is honoured (no `disable-wp` in the DT) | a different adapter |
+| `No matching distribution found for exceptiongroup` | the §11.10 dry run used `--python-version 3.9` from python 3.11, which evaluates markers against the host | wheel added; verify under a real 3.9 (`pynq_offline/README.md`) |
+| `Device.devices == []`, zocl and `xbutil` fine | PYNQ imports its device classes only if `XILINX_XRT` is set, then loads `$XILINX_XRT/lib/libxrt_core.so` | `XILINX_XRT=/usr`, set in `run_on_board.py` |
+| `No module named 'bitstring'` | `deploy/finn/util/data_packing.py` imports it; not a PYNQ dependency | `bitstring` 3.1.9 wheel (last pure-Python release) |
+| `No such file ... /lib/firmware/resizer.bin` | the image has no `/lib/firmware`; `Overlay` writes the `.bin` for fpga_manager there | `os.makedirs` in `run_on_board.py` |
+
+Plus one that is not a bug but made the first run look hung: FINN's
+`packed_bytearray_to_finnpy` has fast paths only for 8/16-bit outputs, and INT21
+went through hex strings — **25.6 s per frame** on the A53. A NumPy path in
+`deploy/finn/util/data_packing.py` (not in upstream FINN) replaces it: read the
+packed bytes as one uint64 and shift fields out, falling back to
+`np.unpackbits` only above 8 bytes. **6.35 ms per frame on the A53** (the
+`unpackbits`-only first version was 40.9 ms); checked against the slow path on
+17 dtype/width cases including INT21 extremes, both branches, and re-verified
+bit-exact on the board. Per-frame `execute()` on the board: **52.4 ms**.
+
+**End-to-end, buffer in to aim out, per stage** — 60 real frames, ms:
+
+| stage | median | p95 | max |
+|---|---|---|---|
+| pack + cache flush in | 3.11 | 3.18 | 3.22 |
+| **accelerator (PL)** | **42.28** | 42.30 | 42.34 |
+| invalidate + copy out | 0.24 | 0.25 | 0.32 |
+| unpack INT21 | 6.35 | 6.45 | 687.75 |
+| dequantize + DFL decode | 10.73 | 10.83 | 11.10 |
+| threshold 0.25 | 0.11 | 0.13 | 0.19 |
+| NMS | 0.41 | 0.44 | 0.74 |
+| `track.update` | 2.34 | 2.65 | 3.05 |
+| **total** | **65.58** | 65.96 | 747.92 |
+
+~10 boxes above 0.25 per frame (max 19), ~1 after NMS. The PL is dead steady
+(±0.03 ms); every bit of jitter is on the CPU side. The single 688 ms unpack is
+one outlier in 60 — most likely first-call warm-up, not investigated. **Not in
+the total:** camera exposure/readout, USB transfer and the crop — nothing has run
+from a real camera yet. Before the unpack fix the total was 100.07 ms.
+
+**Threshold before decode, not after.** Confidence is `sigmoid(int × scale +
+bias)` of one channel, monotonic, so `postprocess.decode_confident` thresholds
+that channel for all 960 cells and runs dequantize + DFL softmax only on the
+survivors (~10). Nothing the tracker could use is lost — its own `CONF_THR` is
+the same 0.25 and it discards the rest first thing. Against the full `decode` on
+60 golden frames at thresholds 0.25 / 0.05 / 0.001: identical cell sets,
+identical confidences, boxes within 3.1e-5 px. On the board:
+
+| stage | median | p95 | max |
+|---|---|---|---|
+| pack + cache flush in | 3.07 | 3.15 | 3.21 |
+| **accelerator (PL)** | **42.29** | 42.29 | 42.31 |
+| invalidate + copy out | 0.23 | 0.25 | 0.31 |
+| unpack INT21 | 6.32 | 6.48 | 8.36 |
+| `decode_confident` (was dequantize + decode + threshold, 10.84) | **1.67** | 1.75 | 2.19 |
+| NMS | 0.36 | 0.41 | 0.63 |
+| `track.update` | 2.23 | 2.52 | 2.93 |
+| **total** | **56.19** | 56.60 | 59.41 |
+
+The 688 ms unpack outlier did not recur (max 8.36). The PL is now 75% of the
+buffer-to-aim time; the CPU side is ~14 ms.
+
+**Latency vs throughput, measured** — `execute_on_buffers()` at batch *b*, median
+of 5:
+
+| batch | total ms | ms/frame | FPS |
+|---|---|---|---|
+| 1 | 42.24 | 42.24 | 23.7 |
+| 2 | 68.47 | 34.23 | 29.2 |
+| 4 | 120.94 | 30.23 | 33.1 |
+| 8 | 225.88 | 28.24 | 35.4 |
+| 16 | 435.77 | 27.24 | 36.7 |
+| 32 | 855.53 | 26.74 | 37.4 |
+
+A clean `L + (b−1)·I` fit: **single-frame latency ≈ 42 ms, steady-state interval
+≈ 26.2 ms (≈ 38 FPS)**. So `throughput_test`'s "23.6 images/s" at batch 1 is
+latency, as §10.4 warned — but the steady state is still **2.4× slower than the
+90.4 FPS (11.06 ms) that FINN's cycle estimate promised** (§10.3). DMA cannot
+explain it: ~185 KB each way per frame is ~7 MB/s. Something in the pipeline
+runs slower than its `estimate_layer_cycles`, or FIFO back-pressure throttles
+it. Finding which needs `RTLSIM_PERFORMANCE` on the stitched IP, or per-layer
+counters. Not yet done — issues §9.
+
+At 100 MHz, 42 ms of latency already fits the 50–100 ms end-to-end budget; the
+gap matters for frame rate, not for whether the chain works.
 
 ## 12. The camera, on the host — 2026-09-10
 
