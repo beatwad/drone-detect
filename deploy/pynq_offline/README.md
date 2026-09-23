@@ -6,7 +6,7 @@ so on the card it is `/home/root/deploy/pynq_offline` (minus the sdist).
 
     pynq-3.0.1-py3-none-any.whl   what to install: a pure-Python PYNQ
     pure-python.patch             the one-line change that makes it pure Python
-    wheels/                       31 dependencies, cp39 / manylinux2014_aarch64
+    wheels/                       32 dependencies, cp39 / manylinux2014_aarch64
 
 The upstream sdist is not kept: it is 60 MB, only the wheel is ever installed,
 and PyPI has it whenever the wheel needs rebuilding.
@@ -15,16 +15,33 @@ and PyPI has it whenever the wheel needs rebuilding.
 
 ```bash
 cd /home/root/deploy/pynq_offline
-pip3 install --no-index --find-links wheels pynq-3.0.1-py3-none-any.whl ipython
+pip3 install --no-index --find-links wheels pynq-3.0.1-py3-none-any.whl ipython bitstring
 ```
+
+**`bitstring` is not a PYNQ dependency at all** — `deploy/finn/util/data_packing.py`
+imports it at module scope. 3.1.9 is the last pure-Python release; 4.x pulls in
+`bitarray`, a C extension.
 
 **`ipython` has to be named explicitly.** It is an undeclared dependency:
 `pynq.overlay` imports `pynqmetadata.frontends`, which imports
 `pynqmetadata.frontends.visualisations`, which imports `IPython.display` at
 module scope — and `pynqmetadata` 0.1.2 does not list it. Without it
 `import pynq` dies with `ModuleNotFoundError: No module named 'IPython'`, which
-looks nothing like a PYNQ problem. Resolved offline: 32 packages, verified with
-a `--dry-run` install against the board's platform tags.
+looks nothing like a PYNQ problem. Resolved offline: 33 packages.
+
+**Verify a changed bundle under a real python 3.9**, not with
+`--python-version 3.9` from a newer interpreter: pip then evaluates
+`python_version` markers against the *host* python and silently drops
+dependencies only 3.9 needs. That is how `exceptiongroup` (ipython's, for
+python < 3.11) went missing and the first install on the board failed,
+2026-09-23:
+
+```bash
+uv run --no-project --python 3.9 --with pip python -m pip install --dry-run \
+    --no-index --find-links wheels --target /tmp/x \
+    --platform manylinux2014_aarch64 --only-binary=:all: \
+    pynq-3.0.1-py3-none-any.whl ipython
+```
 
 **Do not export `BOARD` or `PYNQ_JUPYTER_NOTEBOOKS`.** Setting `BOARD` makes the
 install call `download_overlays()`, which fetches from the internet — the one
@@ -76,9 +93,9 @@ an `IndexError` on `Device.devices[0]` in `run_on_board.py`.
 
 ## What is still untested
 
-That `Device.devices` is non-empty on the real board. That needs the image built
-with the zocl node and `cma=512M` (commit `3146608`), XRT up, and the board
-present. Everything upstream of it is now checked.
+Nothing on our path. On the real board 2026-09-23 `Device.devices` came back
+non-empty — after `export XILINX_XRT=/usr`, which PYNQ needs even though this
+image has nothing to source. build_notes §11.11.
 
 The tradeoff accepted here: this is a modified PYNQ. Anything that later wants
 `pynq.lib.video`, `pynq.lib.audio` or the PCam driver will fail at import, and
