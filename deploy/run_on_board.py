@@ -127,6 +127,10 @@ def main():
     p.add_argument("--save", default="", help="write raw INT21 output to this .npz")
     p.add_argument("--self-test", action="store_true",
                    help="check the comparison on the host, without a board")
+    p.add_argument("--fclk", type=float, default=100.0,
+                   help="PL clock in MHz, set after the bitstream loads (so after reset). "
+                        "Timing is signed off at 100; the data paths allow ~166 "
+                        "(build_notes 11.12). The PLL gives 1499.85/N: 150, 166.7, 187.5")
     args = p.parse_args()
 
     if args.self_test:
@@ -157,8 +161,11 @@ def main():
         batch_size=1,
         runtime_weight_dir=os.path.join(HERE, "runtime_weights/"),
         device=Device.devices[0],
+        fclk_mhz=args.fclk,
     )
-    print(f"bitstream loaded, fclk = {accel.fclk_mhz:.1f} MHz")
+    # accel.fclk_mhz is what was asked for; the PLL lands on the nearest divider
+    from pynq.ps import Clocks
+    print(f"bitstream loaded, fclk = {Clocks.fclk0_mhz:.2f} MHz (asked {args.fclk:.1f})")
 
     raw, dt = [], []
     for k in range(x.shape[0]):

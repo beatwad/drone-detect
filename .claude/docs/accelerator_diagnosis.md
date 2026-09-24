@@ -57,7 +57,7 @@ On the board (`ssh`/serial, as root), this reproduces the table above in a few
 seconds. It is deterministic. Run it before and after any fix:
 
 ```python
-# /tmp/tput.py -- latency vs throughput of the PL alone
+# /tmp/tput.py -- latency vs throughput of the PL alone.  FCLK=150 python3 /tmp/tput.py
 import os, sys, time
 sys.path.insert(0, "/home/root/deploy")
 os.environ.setdefault("XILINX_XRT", "/usr")
@@ -70,12 +70,14 @@ for b in (1, 2, 4, 8, 16, 32):
     acc = FINNExampleOverlay(bitfile_name="/home/root/deploy/resizer.bit", platform="zynq-iodma",
                              io_shape_dict=io_shape_dict, batch_size=b,
                              runtime_weight_dir="/home/root/deploy/runtime_weights/",
-                             device=Device.devices[0])
+                             device=Device.devices[0], fclk_mhz=float(os.environ.get("FCLK", "100")))
     t = []
     for _ in range(5):
         t0 = time.perf_counter(); acc.execute_on_buffers(); t.append(time.perf_counter() - t0)
     t = sorted(t)[2]
-    print(f"batch {b:3d}: {t*1e3:8.2f} ms total, {t*1e3/b:6.2f} ms/frame, {b/t:6.1f} FPS", flush=True)
+    from pynq.ps import Clocks
+    print(f"batch {b:3d}: {t*1e3:8.2f} ms total, {t*1e3/b:6.2f} ms/frame, {b/t:6.1f} FPS"
+          f"  @ {Clocks.fclk0_mhz:.2f} MHz", flush=True)
 ```
 
 A fixed bitstream is green when batch 32 approaches ~11 ms/frame (or whatever

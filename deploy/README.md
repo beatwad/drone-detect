@@ -122,7 +122,7 @@ It also creates `/lib/firmware`, where `pynq.Overlay` hands the bitstream to
 fpga_manager and which this image lacks. Measured 2026-09-23:
 
 ```
-bitstream loaded, fclk = 100.0 MHz
+bitstream loaded, fclk = 99.99 MHz (asked 100.0)
 60 frames, per-frame execute(): median 86.61 ms ... -> 11.5 FPS (driver included)
 accelerator alone: runtime[ms] 42.29..., throughput[images/s] 23.64...
   max |delta| LSB  0.000000e+00
@@ -132,6 +132,14 @@ PASS  hardware matches the simulated graph
 
 `accelerator alone` is batch 1, i.e. **latency**, not throughput — build_notes
 §11.11.
+
+`--fclk 150` (or 166.7) runs the PL faster without a rebuild. The clock is set
+after the bitstream loads, so the slow reset net (8.2 ns) is already out of the
+way, and the data paths have 5.45 ns worst case — within timing up to ~166 MHz.
+187.5 is past the worst-case corner: a lab experiment, not a setting. The line
+above prints the frequency the PLL actually landed on. The comparison must still
+PASS; for the steady-state interval use `FCLK=150 python3 /tmp/tput.py`
+(accelerator_diagnosis.md §2).
 
 ### If it goes wrong
 
