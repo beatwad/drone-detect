@@ -11,7 +11,7 @@ WORK=${WORK:-/home/alex/finn_build_mdanilow/diag}            # outputs: logs, ob
 mkdir -p $WORK
 O=$WORK/design_obj
 IMG=xilinx/finn:v0.10-215-g60ccf026.xrt_202220.2.14.354_22.04-amd64-xrt
-DOCKER="docker run --rm --entrypoint bash -v $B:$B -v /home/alex/Repos:/home/alex/Repos -v /home/alex/Xilinx:/home/alex/Xilinx:ro $IMG -c"
+DOCKER="docker run --rm --user $(id -u):$(id -g) -e HOME=/tmp -e CCACHE_DIR=/tmp/ccache --entrypoint bash -v $B:$B -v /home/alex/Repos:/home/alex/Repos -v /home/alex/Xilinx:/home/alex/Xilinx:ro $IMG -c"
 case "$1" in
 build)
     grep -E "\.s?v$" $S/all_verilog_srcs.txt \

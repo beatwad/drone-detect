@@ -18,7 +18,7 @@ IN_W=$(grep -oE "VL_IN[0-9W]*\(&in0_V_TDATA,[0-9]+" $P/V$N.h | grep -oE "[0-9]+$
 OUT_W=$(grep -oE "VL_OUT[0-9W]*\(&out_V_TDATA,[0-9]+" $P/V$N.h | grep -oE "[0-9]+$"); OUT_W=$((OUT_W+1))
 W=/tmp/layer_$N
 echo "$N: memstream DEPTH=$DEPTH WIDTH=$WIDTH, in $IN_W b, out $OUT_W b"
-docker run --rm --entrypoint bash -v $B:$B -v /home/alex/Repos:/home/alex/Repos \
+docker run --rm --user $(id -u):$(id -g) -e HOME=/tmp -e CCACHE_DIR=/tmp/ccache --entrypoint bash -v $B:$B -v /home/alex/Repos:/home/alex/Repos \
   xilinx/finn:v0.10-215-g60ccf026.xrt_202220.2.14.354_22.04-amd64-xrt -c "
   set -e; mkdir -p $W && cd $W
   verilator --cc --exe --build -O3 -j 8 -Wno-fatal -Wno-lint -Wno-style -Wno-MULTIDRIVEN \
