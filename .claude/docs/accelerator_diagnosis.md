@@ -5,6 +5,23 @@ the build tree of the shipping bitstream lives, by someone (or a Claude session)
 with no memory of the conversation that produced it. Everything needed is here
 or linked.
 
+## 0. Result — 2026-09-24
+
+**H4 holds, in its narrowest form.** Two FIFOs: the P3 skip
+(`StreamingFIFO_rtl_78`, `DuplicateStreams_hls_3 → StreamingConcat_hls_7`) and the
+P4 skip (`StreamingFIFO_rtl_123`, `DuplicateStreams_hls_6 → StreamingConcat_hls_5`),
+each built exactly one tensor deep. Raised to 159,744 and 55,294 words, a
+whole-design simulation that matches the board to 64 cycles runs at **1,114,135
+cycles/frame (11.14 ms, 89.8 FPS)** instead of 2,623,215. H1, H2, H3 and H5 are
+excluded with numbers, and so is a sixth one found on the way (the MVAU weight
+streamer). Full account, tooling and the traps: build_notes §11.12.
+
+**To apply:** in `drone_v8_bit/final_hw_config.json` set `StreamingFIFO_rtl_78.depth`
+= 159744 and `StreamingFIFO_rtl_123.depth` = 55294, plus the matching entry of
+`outFIFODepths` on `DuplicateStreams_hls_3/6` and `inFIFODepths` on
+`StreamingConcat_hls_7/5`; rebuild from that config with `auto_fifo_depths=False`
+(skips the 12.8 h sizing run). Then §2's loop on the board.
+
 ## 1. The symptom, measured on the ZCU102
 
 Bitstream: `deploy/resizer.bit` = the 2026-08-15 build (build_notes §10.16),

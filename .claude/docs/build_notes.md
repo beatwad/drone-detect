@@ -1322,10 +1322,10 @@ budget new designs with these multipliers and expect a few percent.
 
 Timing: **WNS +1.765 ns** at 10.0 ns, TNS 0.000, **0 of 379,557 endpoints
 failing**, hold met (WHS +0.006, tight but positive). Critical path 8.235 ns →
-**~121 MHz achievable**, vs the reference's 6.72 ns / ~149 MHz. **We are smaller
-than the reference on every resource yet have half its slack**, so the long path
-is ours, not the flow's — look at the P3 head or a wide MVAU if clock ever
-matters. It does not yet: 90.4 FPS at the built 100 MHz (≈110 if clocked up)
+~121 MHz, vs the reference's 6.72 ns / ~149 MHz. **Corrected 2026-09-24 (§11.12):**
+that path is the reset net (97.8% route), not the design; the worst data path is
+5.45 ns, ~183 MHz. The earlier reading here — "the long path is ours, look at the
+P3 head or a wide MVAU" — was wrong. It does not yet: 90.4 FPS at the built 100 MHz (≈110 if clocked up)
 against a 50–100 ms end-to-end budget.
 
 Power, post-route: **5.104 W total, PS8 2.736 W**, static 0.738 W, whole fabric
@@ -1795,10 +1795,85 @@ latency, as §10.4 warned — but the steady state is still **2.4× slower than 
 explain it: ~185 KB each way per frame is ~7 MB/s. Something in the pipeline
 runs slower than its `estimate_layer_cycles`, or FIFO back-pressure throttles
 it. Finding which needs `RTLSIM_PERFORMANCE` on the stitched IP, or per-layer
-counters. Not yet done — issues §9.
+counters. **Found 2026-09-24: two skip FIFOs one tensor deep — §11.12.**
 
 At 100 MHz, 42 ms of latency already fits the 50–100 ms end-to-end budget; the
 gap matters for frame rate, not for whether the chain works.
+
+### 11.12 Why the PL ran 2.4× slow: two skip FIFOs one tensor deep — 2026-09-24
+
+**Cause, measured:** the two long skip branches of the FPN — P3
+(`DuplicateStreams_hls_3 → StreamingConcat_hls_7`) and P4 (`DuplicateStreams_hls_6
+→ StreamingConcat_hls_5`) — were built exactly **one tensor** deep. The other
+branch of each goes through P4 → P5 → SPPF → upsample, and SPPF cannot emit a row
+until it has seen the whole frame, so that branch's latency spans more than one
+frame. With one tensor on the skip, only one frame fits between fork and join; the
+fork blocks, the backbone above it stalls, and the pipeline runs one frame at a
+time. **Fix: P3 skip 61,440 → 159,744 words, P4 skip 30,718 → 55,294.** Interval
+2,623,215 → **1,114,135 cycles = 11.14 ms = 89.8 FPS at 100 MHz**, stable over 7
+consecutive frames. About +30 BRAM36 (75.8% → ~79%). **Not yet rebuilt.**
+
+Needed skip depth ≈ (long-branch latency) / (interval): measured occupancy was
+2.38 tensors on P3 (≈ 2.62M / 1.11M), 1.7 on P4. P3 at 2.2 tensors held for one
+frame and then degraded to 1.29M; 2.6 holds. SPPF's own skip (`DuplicateStreams_8 →
+Concat_4`) needs nothing extra.
+
+**Why FINN sized them to one tensor.** `InsertAndSetFIFODepths` with
+`largefifo_rtlsim` sets every FIFO to its tensor size for the sizing rtlsim and
+records the max occupancy. On a net whose skip needs more than a tensor, that
+FIFO saturates at the cap, the sizing sim itself runs in the one-frame-at-a-time
+mode (it took exactly the board's cycles, below), and the "measured" depth is the
+cap. The tensor-size cap guarantees no deadlock, not throughput. **Expect this on
+any FINN net with a skip around a full-frame operator (SPPF, global pooling).**
+Check after sizing: a join input FIFO at exactly 100% of its tensor is suspect.
+
+**Latency is unchanged by the fix: 4,207,300 cycles (42.07 ms) in every
+configuration.** It is structural — the post-SPPF half cannot start a frame until
+the pre-SPPF half has finished it, and each half runs at the bottleneck rate, so
+latency ≈ 3.8 × interval. Lower latency needs the post-SPPF layers folded faster
+than the bottleneck, not buffers.
+
+**How it was found** — tooling in `export/rtlsim/` (README there; outputs go to
+`~/finn_build_mdanilow/diag/`):
+
+- `design.sh build|run`: the stitched project's own Verilog
+  (`vivado_stitch_proj_a5f6s728/all_verilog_srcs.txt`) verilated whole, with the
+  173 Xilinx `axis_data_fifo` instances replaced by `axis_data_fifo_sim.sv` — same
+  depth by default, per-instance or global depth from plusargs at run time, max
+  occupancy and full/empty fractions reported. Reproduces the board: **latency
+  4,207,300 vs 4,223,578, interval 2,623,215 vs 2,623,279** (the board figures are
+  ms × 99.99 MHz). A 2-frame run is minutes; no Vivado, no FINN.
+  One package fix: 28 identical `swg_pkg.sv` copies, keep one, list it first.
+- `tb.sh` / `layer.sh`: one node, or one MVAU_rtl + its `memstream`, timed alone.
+- The FINN sizing run had already reported the answer: `drone_resume.log`
+  line 27234, `Number of clock cycles 6830339` for 2 frames = the board's L + I.
+
+**Excluded on the way, each with a number:** our own `estimate_network_performance`
+does say 90.42 FPS / `max_cycles` 1,105,920 (`MVAU_rtl_3`), so the estimate is
+ours, not the reference's; every HLS layer's csynth latency = its estimate (±0.00,
+the two upsamplers ×1.50 but at 184k cycles); `MVAU_rtl_3` alone 1,105,928, and
+with its weight `memstream` also 1,105,928; rtlsim = silicon to 0.24%.
+
+**Two traps in the tooling, both cost hours:**
+
+1. `%m` inside an `initial begin ... end` that declares variables is
+   `<instance>.unnamedblk1`, not `<instance>`. A plusarg key built from it never
+   matched the names I passed, so every per-instance override was silently a no-op
+   — and five experiments "refuted" the right hypothesis. `set_depths.sh` now
+   builds the key with the suffix and reports how many limits actually changed.
+   **Always print what an override changed.**
+2. FINN's own per-node rtlsim (`cycles_rtlsim` via PyVerilator) drives one Python
+   iteration per clock: MVAU_rtl_3's 1.1M cycles did not finish in 40 minutes. A
+   C++ testbench against the same verilated objects: 1 s.
+
+**Critical path: §10.16 was wrong.** The 8.235 ns path is the reset net — one
+`proc_sys_reset` flip-flop fanned out across the die, 1 logic level, **97.8%
+route**; all ten worst setup paths are it. With the reset excluded from analysis
+the worst **data** path has +4.552 ns slack at 10 ns (5.45 ns, **~183 MHz**), in
+the output IODMA's HLS width converter, not the network. So "~121 MHz achievable"
+understates the datapath; the fix for the reset is a pipelined reset tree, the
+standard one. Whether the reference's 6.72 ns was also its reset cannot be checked
+— its build tree was deleted 2026-09-22.
 
 ## 12. The camera, on the host — 2026-09-10
 

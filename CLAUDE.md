@@ -141,9 +141,15 @@ Key facts, all detailed in [build_notes.md](.claude/docs/build_notes.md):
    64.6 ms median from driver timestamp to aim** (p95 79). Capture is 1280×720
    @200 YUYV (a native sensor crop, really ~249 fps), centre 320×192, converted
    in C (`libyuyv.so`, 1.6 ms; NumPy was 13 ms). Nothing has seen a real drone.
-11. **NEXT:** the accelerator is now ~80% of the loop — find why steady state is
-   26.2 ms/frame and latency 42 ms rather than 11 (issues §9); measure board
-   power under load; point the camera at a drone.
+11. **Accelerator slowdown diagnosed — 2026-09-24**, build_notes §11.12. The P3
+   and P4 FPN skip FIFOs were one tensor deep (FINN's sizing cap), so only one
+   frame fit between fork and join. Deepening those two gives **11.14 ms/frame,
+   89.8 FPS** in a whole-design simulation that matches the board to 64 cycles,
+   for ~+30 BRAM36. Latency stays 42 ms: structural (SPPF needs the whole frame).
+   The "121 MHz" limit was the reset net; data paths allow ~183 MHz.
+12. **NEXT:** rebuild with the two FIFO depths (`auto_fifo_depths=False`, no
+   re-sizing) and confirm on the board; measure board power under load; point
+   the camera at a drone.
 
 6. **The whole YOLOv5 line was removed 2026-08-20** — vendored `yolov5/`, its
    QAT and export scripts, and the `pico` / `n_eighth` / `relu` configs. It had
@@ -297,7 +303,8 @@ Key facts, all detailed in [build_notes.md](.claude/docs/build_notes.md):
   `training/`, `qat/` (`quantize.py` `ptq_baseline.py` `train_qat.py`
   `evaluate.py`), `export/` (`export_qonnx.py` `verify_qonnx.py`
   `check_join_scales.py` `finn_transforms.py` `finn_build.py`
-  `balance_folding.py` `verify_qonnx_v8.py` `verify_finn_steps.py`),
+  `balance_folding.py` `verify_qonnx_v8.py` `verify_finn_steps.py`, and `rtlsim/` —
+  the stitched design in Verilator, matches the board to 64 cycles),
   `deploy/` — **is** the board's `/home/root/deploy`: `resizer.bit/.hwh`,
   `driver_base.py`, trimmed `finn/` + `qonnx/`, `inputs.npz` + `out_hw.npz`,
   `postprocess.py` `run_on_board.py` `track.py` `capture.py` `live.py`

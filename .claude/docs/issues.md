@@ -164,20 +164,20 @@ host. See [research/pynq-on-zcu102.md](research/pynq-on-zcu102.md).
 **Solved when:** `run_on_board.py` compares real INT21 against the 60-frame
 golden set on hardware and passes at 0.05 LSB.
 
-## 9. Real throughput is 2.4× below FINN's estimate, and power is unmeasured
+## 9. Real throughput is 2.4× below FINN's estimate — cause found, fix not yet built; power unmeasured
 
 **Measured 2026-09-23** (build_notes §11.11): single-frame latency ≈ 42 ms,
-steady-state ≈ 26.2 ms/frame ≈ **38 FPS** at 100 MHz — against the **90.4 FPS**
-FINN's cycle estimate predicted. DMA is not it (~7 MB/s). Either a layer is
-slower than `estimate_layer_cycles` says, or FIFO back-pressure throttles the
-pipeline. Power under load is still only the Vivado report (5.10 W, PS8 2.74 W).
+steady-state ≈ 26.2 ms/frame ≈ **38 FPS** at 100 MHz, against FINN's **90.4 FPS**.
 
-Worked in [accelerator_diagnosis.md](accelerator_diagnosis.md): the board-side
-loop, what is excluded, five ranked hypotheses and the steps to test them on
-the PC that holds the build tree.
+**Cause found 2026-09-24** (build_notes §11.12): the P3 and P4 skip branches of
+the FPN were sized to exactly one tensor, which lets only one frame sit between
+fork and join. In a whole-design Verilator simulation that reproduces the board
+to 64 cycles, deepening just those two FIFOs gives **11.14 ms/frame (89.8 FPS)**,
+stable, for about +30 BRAM36. Latency stays 42 ms — that part is structural.
 
-**Solved when:** the slow stage is named (`RTLSIM_PERFORMANCE` on the stitched
-IP, or per-layer counters) and either fixed or accepted with a number, and board
+**Solved when:** the rebuilt bitstream (`final_hw_config.json` with the two
+depths, `auto_fifo_depths=False`) shows ~11.1 ms/frame on the board in
+`accelerator_diagnosis.md`'s `tput.py`, `run_on_board.py` still passes, and board
 power is measured under a continuous frame stream.
 
 ## 10. The deployment part is undecided, and BRAM is the constraint
