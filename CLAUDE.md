@@ -147,9 +147,14 @@ Key facts, all detailed in [build_notes.md](.claude/docs/build_notes.md):
    89.8 FPS** in a whole-design simulation that matches the board to 64 cycles,
    for ~+30 BRAM36. Latency stays 42 ms: structural (SPPF needs the whole frame).
    The "121 MHz" limit was the reset net; data paths allow ~183 MHz.
-12. **NEXT:** rebuild with the two FIFO depths (`auto_fifo_depths=False`, no
-   re-sizing) and confirm on the board; measure board power under load; point
-   the camera at a drone.
+12. **Rebuilt with the FIFO fix at 5 ns — 2026-09-26**, build_notes §11.13.
+   Timing met at **187.48 MHz** (asked 200; IOPLL/8, +0.55 ns), BRAM 720 (79.0%).
+   Now `deploy/resizer.bit`; the deploy scripts default to 187.5 MHz, so never
+   run the old bitstream with those defaults. Expected ~5.9 ms/frame (~168 FPS),
+   ~22 ms latency. Recipe traps: the §10.14 HLS race recurs, the only stitch is
+   inside `step_synthesize_bitfile` (12 h 56 min), `BD 5-336` needs the harness.
+13. **NEXT:** confirm on the board (`run_on_board.py` PASS, `tput.py` interval);
+   measure board power under load; point the camera at a drone.
 
 6. **The whole YOLOv5 line was removed 2026-08-20** — vendored `yolov5/`, its
    QAT and export scripts, and the `pico` / `n_eighth` / `relu` configs. It had

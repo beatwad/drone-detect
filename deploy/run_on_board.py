@@ -127,10 +127,10 @@ def main():
     p.add_argument("--save", default="", help="write raw INT21 output to this .npz")
     p.add_argument("--self-test", action="store_true",
                    help="check the comparison on the host, without a board")
-    p.add_argument("--fclk", type=float, default=100.0,
-                   help="PL clock in MHz, set after the bitstream loads (so after reset). "
-                        "Timing is signed off at 100; the data paths allow ~166 "
-                        "(build_notes 11.12). The PLL gives 1499.85/N: 150, 166.7, 187.5")
+    p.add_argument("--fclk", type=float, default=187.5,
+                   help="PL clock in MHz, set after the bitstream loads. The 2026-09-26 "
+                        "bitstream is signed off at 187.5 (IOPLL/8, +0.55 ns); lower is "
+                        "always safe. The PLL gives 1499.85/N: 150, 166.7, 187.5")
     args = p.parse_args()
 
     if args.self_test:

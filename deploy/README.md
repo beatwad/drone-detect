@@ -133,12 +133,12 @@ PASS  hardware matches the simulated graph
 `accelerator alone` is batch 1, i.e. **latency**, not throughput — build_notes
 §11.11.
 
-`--fclk 150` (or 166.7) runs the PL faster without a rebuild. The clock is set
-after the bitstream loads, so the slow reset net (8.2 ns) is already out of the
-way, and the data paths have 5.45 ns worst case — within timing up to ~166 MHz.
-187.5 is past the worst-case corner: a lab experiment, not a setting. The line
-above prints the frequency the PLL actually landed on. The comparison must still
-PASS; for the steady-state interval use `FCLK=150 python3 /tmp/tput.py`
+The output above is from the 2026-08-15 bitstream at 100 MHz. The current one
+(2026-09-26: deeper P3/P4 skip FIFOs, built for 5 ns) is signed off at
+**187.5 MHz** (IOPLL/8, WNS +0.55 ns), and that is now the default of both
+`--fclk` and `FINNExampleOverlay`, so `live.py` gets it too. Any lower `--fclk`
+is safe, just slower. The first line prints the frequency the PLL actually
+landed on. For the steady-state interval use `FCLK=187.5 python3 /tmp/tput.py`
 (accelerator_diagnosis.md §2).
 
 ### If it goes wrong

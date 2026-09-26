@@ -1,5 +1,5 @@
 ﻿<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
-<EDKSYSTEM EDWVERSION="1.2" TIMESTAMP="Sat Aug 15 09:26:14 2026" VIVADOVERSION="2022.2">
+<EDKSYSTEM EDWVERSION="1.2" TIMESTAMP="Sat Sep 26 01:20:46 2026" VIVADOVERSION="2022.2">
 
   <SYSTEMINFO ARCH="zynquplus" BOARD="xilinx.com:zcu102:part0:3.3" DEVICE="xczu9eg" NAME="top" PACKAGE="ffvb1156" SPEEDGRADE="-2"/>
 
@@ -15,14 +15,14 @@
         <PARAMETER NAME="EDK_IPTYPE" VALUE="PERIPHERAL"/>
       </PARAMETERS>
       <PORTS>
-        <PORT CLKFREQUENCY="99990005" DIR="I" NAME="ap_clk" SIGIS="clk" SIGNAME="zynq_ps_pl_clk0">
+        <PORT CLKFREQUENCY="187481262" DIR="I" NAME="ap_clk" SIGIS="clk" SIGNAME="zynq_ps_pl_clk0">
           <CONNECTIONS>
             <CONNECTION INSTANCE="zynq_ps" PORT="pl_clk0"/>
           </CONNECTIONS>
         </PORT>
-        <PORT DIR="I" NAME="ap_rst_n" POLARITY="ACTIVE_LOW" SIGIS="rst" SIGNAME="rst_zynq_ps_99M_peripheral_aresetn">
+        <PORT DIR="I" NAME="ap_rst_n" POLARITY="ACTIVE_LOW" SIGIS="rst" SIGNAME="rst_zynq_ps_187M_peripheral_aresetn">
           <CONNECTIONS>
-            <CONNECTION INSTANCE="rst_zynq_ps_99M" PORT="peripheral_aresetn"/>
+            <CONNECTION INSTANCE="rst_zynq_ps_187M" PORT="peripheral_aresetn"/>
           </CONNECTIONS>
         </PORT>
         <PORT DIR="O" LEFT="23" NAME="m_axis_0_tdata" RIGHT="0" SIGIS="undef" SIGNAME="StreamingDataflowPartition_1_m_axis_0_tdata">
@@ -66,7 +66,7 @@
           <PARAMETER NAME="HAS_TSTRB" VALUE="0"/>
           <PARAMETER NAME="HAS_TKEEP" VALUE="0"/>
           <PARAMETER NAME="HAS_TLAST" VALUE="0"/>
-          <PARAMETER NAME="FREQ_HZ" VALUE="99990005"/>
+          <PARAMETER NAME="FREQ_HZ" VALUE="187481262"/>
           <PARAMETER NAME="PHASE" VALUE="0.0"/>
           <PARAMETER NAME="LAYERED_METADATA" VALUE="undef"/>
           <PARAMETER NAME="CLK_DOMAIN" VALUE="top_zynq_ps_0_pl_clk0"/>
@@ -86,7 +86,7 @@
           <PARAMETER NAME="HAS_TSTRB" VALUE="0"/>
           <PARAMETER NAME="HAS_TKEEP" VALUE="0"/>
           <PARAMETER NAME="HAS_TLAST" VALUE="0"/>
-          <PARAMETER NAME="FREQ_HZ" VALUE="99990005"/>
+          <PARAMETER NAME="FREQ_HZ" VALUE="187481262"/>
           <PARAMETER NAME="PHASE" VALUE="0.0"/>
           <PARAMETER NAME="LAYERED_METADATA" VALUE="undef"/>
           <PARAMETER NAME="CLK_DOMAIN" VALUE="top_zynq_ps_0_pl_clk0"/>
@@ -427,9 +427,9 @@
             <CONNECTION INSTANCE="zynq_ps" PORT="pl_clk0"/>
           </CONNECTIONS>
         </PORT>
-        <PORT DIR="I" NAME="ARESETN" SIGIS="rst" SIGNAME="rst_zynq_ps_99M_peripheral_aresetn">
+        <PORT DIR="I" NAME="ARESETN" SIGIS="rst" SIGNAME="rst_zynq_ps_187M_peripheral_aresetn">
           <CONNECTIONS>
-            <CONNECTION INSTANCE="rst_zynq_ps_99M" PORT="peripheral_aresetn"/>
+            <CONNECTION INSTANCE="rst_zynq_ps_187M" PORT="peripheral_aresetn"/>
           </CONNECTIONS>
         </PORT>
         <PORT DIR="I" NAME="S00_ACLK" SIGIS="clk" SIGNAME="zynq_ps_pl_clk0">
@@ -437,9 +437,9 @@
             <CONNECTION INSTANCE="zynq_ps" PORT="pl_clk0"/>
           </CONNECTIONS>
         </PORT>
-        <PORT DIR="I" NAME="S00_ARESETN" SIGIS="rst" SIGNAME="rst_zynq_ps_99M_peripheral_aresetn">
+        <PORT DIR="I" NAME="S00_ARESETN" SIGIS="rst" SIGNAME="rst_zynq_ps_187M_peripheral_aresetn">
           <CONNECTIONS>
-            <CONNECTION INSTANCE="rst_zynq_ps_99M" PORT="peripheral_aresetn"/>
+            <CONNECTION INSTANCE="rst_zynq_ps_187M" PORT="peripheral_aresetn"/>
           </CONNECTIONS>
         </PORT>
         <PORT DIR="I" NAME="M00_ACLK" SIGIS="clk" SIGNAME="zynq_ps_pl_clk0">
@@ -447,9 +447,9 @@
             <CONNECTION INSTANCE="zynq_ps" PORT="pl_clk0"/>
           </CONNECTIONS>
         </PORT>
-        <PORT DIR="I" NAME="M00_ARESETN" SIGIS="rst" SIGNAME="rst_zynq_ps_99M_peripheral_aresetn">
+        <PORT DIR="I" NAME="M00_ARESETN" SIGIS="rst" SIGNAME="rst_zynq_ps_187M_peripheral_aresetn">
           <CONNECTIONS>
-            <CONNECTION INSTANCE="rst_zynq_ps_99M" PORT="peripheral_aresetn"/>
+            <CONNECTION INSTANCE="rst_zynq_ps_187M" PORT="peripheral_aresetn"/>
           </CONNECTIONS>
         </PORT>
         <PORT DIR="I" NAME="M01_ACLK" SIGIS="clk" SIGNAME="zynq_ps_pl_clk0">
@@ -457,9 +457,9 @@
             <CONNECTION INSTANCE="zynq_ps" PORT="pl_clk0"/>
           </CONNECTIONS>
         </PORT>
-        <PORT DIR="I" NAME="M01_ARESETN" SIGIS="rst" SIGNAME="rst_zynq_ps_99M_peripheral_aresetn">
+        <PORT DIR="I" NAME="M01_ARESETN" SIGIS="rst" SIGNAME="rst_zynq_ps_187M_peripheral_aresetn">
           <CONNECTIONS>
-            <CONNECTION INSTANCE="rst_zynq_ps_99M" PORT="peripheral_aresetn"/>
+            <CONNECTION INSTANCE="rst_zynq_ps_187M" PORT="peripheral_aresetn"/>
           </CONNECTIONS>
         </PORT>
         <PORT DIR="I" LEFT="39" NAME="S00_AXI_awaddr" RIGHT="0" SIGIS="undef" SIGNAME="axi_interconnect_0_S00_AXI_awaddr">
@@ -1261,14 +1261,14 @@
         <PARAMETER NAME="C_HIGHADDR" VALUE="0xA0000FFF"/>
       </PARAMETERS>
       <PORTS>
-        <PORT CLKFREQUENCY="99990005" DIR="I" NAME="ap_clk" SIGIS="clk" SIGNAME="zynq_ps_pl_clk0">
+        <PORT CLKFREQUENCY="187481262" DIR="I" NAME="ap_clk" SIGIS="clk" SIGNAME="zynq_ps_pl_clk0">
           <CONNECTIONS>
             <CONNECTION INSTANCE="zynq_ps" PORT="pl_clk0"/>
           </CONNECTIONS>
         </PORT>
-        <PORT DIR="I" NAME="ap_rst_n" POLARITY="ACTIVE_LOW" SIGIS="rst" SIGNAME="rst_zynq_ps_99M_peripheral_aresetn">
+        <PORT DIR="I" NAME="ap_rst_n" POLARITY="ACTIVE_LOW" SIGIS="rst" SIGNAME="rst_zynq_ps_187M_peripheral_aresetn">
           <CONNECTIONS>
-            <CONNECTION INSTANCE="rst_zynq_ps_99M" PORT="peripheral_aresetn"/>
+            <CONNECTION INSTANCE="rst_zynq_ps_187M" PORT="peripheral_aresetn"/>
           </CONNECTIONS>
         </PORT>
         <PORT DIR="O" LEFT="63" NAME="m_axi_gmem0_araddr" RIGHT="0" SIGIS="undef" SIGNAME="idma0_m_axi_gmem0_araddr">
@@ -1564,7 +1564,7 @@
         <BUSINTERFACE BUSNAME="axi_interconnect_0_M00_AXI" DATAWIDTH="32" NAME="s_axi_control_0" TYPE="SLAVE" VLNV="xilinx.com:interface:aximm:1.0">
           <PARAMETER NAME="DATA_WIDTH" VALUE="32"/>
           <PARAMETER NAME="PROTOCOL" VALUE="AXI4LITE"/>
-          <PARAMETER NAME="FREQ_HZ" VALUE="99990005"/>
+          <PARAMETER NAME="FREQ_HZ" VALUE="187481262"/>
           <PARAMETER NAME="ID_WIDTH" VALUE="0"/>
           <PARAMETER NAME="ADDR_WIDTH" VALUE="6"/>
           <PARAMETER NAME="AWUSER_WIDTH" VALUE="0"/>
@@ -1616,7 +1616,7 @@
         <BUSINTERFACE BUSNAME="idma0_m_axi_gmem0" DATAWIDTH="128" NAME="m_axi_gmem0" TYPE="MASTER" VLNV="xilinx.com:interface:aximm:1.0">
           <PARAMETER NAME="DATA_WIDTH" VALUE="128"/>
           <PARAMETER NAME="PROTOCOL" VALUE="AXI4"/>
-          <PARAMETER NAME="FREQ_HZ" VALUE="99990005"/>
+          <PARAMETER NAME="FREQ_HZ" VALUE="187481262"/>
           <PARAMETER NAME="ID_WIDTH" VALUE="1"/>
           <PARAMETER NAME="ADDR_WIDTH" VALUE="64"/>
           <PARAMETER NAME="AWUSER_WIDTH" VALUE="0"/>
@@ -1697,7 +1697,7 @@
           <PARAMETER NAME="HAS_TSTRB" VALUE="0"/>
           <PARAMETER NAME="HAS_TKEEP" VALUE="0"/>
           <PARAMETER NAME="HAS_TLAST" VALUE="0"/>
-          <PARAMETER NAME="FREQ_HZ" VALUE="99990005"/>
+          <PARAMETER NAME="FREQ_HZ" VALUE="187481262"/>
           <PARAMETER NAME="PHASE" VALUE="0.0"/>
           <PARAMETER NAME="LAYERED_METADATA" VALUE="undef"/>
           <PARAMETER NAME="CLK_DOMAIN" VALUE="top_zynq_ps_0_pl_clk0"/>
@@ -2006,14 +2006,14 @@
         <PARAMETER NAME="C_HIGHADDR" VALUE="0xA0001FFF"/>
       </PARAMETERS>
       <PORTS>
-        <PORT CLKFREQUENCY="99990005" DIR="I" NAME="ap_clk" SIGIS="clk" SIGNAME="zynq_ps_pl_clk0">
+        <PORT CLKFREQUENCY="187481262" DIR="I" NAME="ap_clk" SIGIS="clk" SIGNAME="zynq_ps_pl_clk0">
           <CONNECTIONS>
             <CONNECTION INSTANCE="zynq_ps" PORT="pl_clk0"/>
           </CONNECTIONS>
         </PORT>
-        <PORT DIR="I" NAME="ap_rst_n" POLARITY="ACTIVE_LOW" SIGIS="rst" SIGNAME="rst_zynq_ps_99M_peripheral_aresetn">
+        <PORT DIR="I" NAME="ap_rst_n" POLARITY="ACTIVE_LOW" SIGIS="rst" SIGNAME="rst_zynq_ps_187M_peripheral_aresetn">
           <CONNECTIONS>
-            <CONNECTION INSTANCE="rst_zynq_ps_99M" PORT="peripheral_aresetn"/>
+            <CONNECTION INSTANCE="rst_zynq_ps_187M" PORT="peripheral_aresetn"/>
           </CONNECTIONS>
         </PORT>
         <PORT DIR="O" LEFT="63" NAME="m_axi_gmem0_araddr" RIGHT="0" SIGIS="undef" SIGNAME="odma0_m_axi_gmem0_araddr">
@@ -2309,7 +2309,7 @@
         <BUSINTERFACE BUSNAME="axi_interconnect_0_M01_AXI" DATAWIDTH="32" NAME="s_axi_control_0" TYPE="SLAVE" VLNV="xilinx.com:interface:aximm:1.0">
           <PARAMETER NAME="DATA_WIDTH" VALUE="32"/>
           <PARAMETER NAME="PROTOCOL" VALUE="AXI4LITE"/>
-          <PARAMETER NAME="FREQ_HZ" VALUE="99990005"/>
+          <PARAMETER NAME="FREQ_HZ" VALUE="187481262"/>
           <PARAMETER NAME="ID_WIDTH" VALUE="0"/>
           <PARAMETER NAME="ADDR_WIDTH" VALUE="6"/>
           <PARAMETER NAME="AWUSER_WIDTH" VALUE="0"/>
@@ -2361,7 +2361,7 @@
         <BUSINTERFACE BUSNAME="odma0_m_axi_gmem0" DATAWIDTH="128" NAME="m_axi_gmem0" TYPE="MASTER" VLNV="xilinx.com:interface:aximm:1.0">
           <PARAMETER NAME="DATA_WIDTH" VALUE="128"/>
           <PARAMETER NAME="PROTOCOL" VALUE="AXI4"/>
-          <PARAMETER NAME="FREQ_HZ" VALUE="99990005"/>
+          <PARAMETER NAME="FREQ_HZ" VALUE="187481262"/>
           <PARAMETER NAME="ID_WIDTH" VALUE="1"/>
           <PARAMETER NAME="ADDR_WIDTH" VALUE="64"/>
           <PARAMETER NAME="AWUSER_WIDTH" VALUE="0"/>
@@ -2442,7 +2442,7 @@
           <PARAMETER NAME="HAS_TSTRB" VALUE="0"/>
           <PARAMETER NAME="HAS_TKEEP" VALUE="0"/>
           <PARAMETER NAME="HAS_TLAST" VALUE="0"/>
-          <PARAMETER NAME="FREQ_HZ" VALUE="99990005"/>
+          <PARAMETER NAME="FREQ_HZ" VALUE="187481262"/>
           <PARAMETER NAME="PHASE" VALUE="0.0"/>
           <PARAMETER NAME="LAYERED_METADATA" VALUE="undef"/>
           <PARAMETER NAME="CLK_DOMAIN" VALUE="top_zynq_ps_0_pl_clk0"/>
@@ -2465,7 +2465,7 @@
         <PERIPHERAL INSTANCE="zynq_ps"/>
       </PERIPHERALS>
     </MODULE>
-    <MODULE COREREVISION="13" FULLNAME="/rst_zynq_ps_99M" HWVERSION="5.0" INSTANCE="rst_zynq_ps_99M" IPTYPE="PERIPHERAL" IS_ENABLE="1" MODCLASS="PERIPHERAL" MODTYPE="proc_sys_reset" VLNV="xilinx.com:ip:proc_sys_reset:5.0">
+    <MODULE COREREVISION="13" FULLNAME="/rst_zynq_ps_187M" HWVERSION="5.0" INSTANCE="rst_zynq_ps_187M" IPTYPE="PERIPHERAL" IS_ENABLE="1" MODCLASS="PERIPHERAL" MODTYPE="proc_sys_reset" VLNV="xilinx.com:ip:proc_sys_reset:5.0">
       <DOCUMENTS>
         <DOCUMENT SOURCE="http://www.xilinx.com/cgi-bin/docs/ipdoc?c=proc_sys_reset;v=v5_0;d=pg164-proc-sys-reset.pdf"/>
       </DOCUMENTS>
@@ -2479,13 +2479,13 @@
         <PARAMETER NAME="C_NUM_PERP_RST" VALUE="1"/>
         <PARAMETER NAME="C_NUM_INTERCONNECT_ARESETN" VALUE="1"/>
         <PARAMETER NAME="C_NUM_PERP_ARESETN" VALUE="1"/>
-        <PARAMETER NAME="Component_Name" VALUE="top_rst_zynq_ps_99M_0"/>
+        <PARAMETER NAME="Component_Name" VALUE="top_rst_zynq_ps_187M_0"/>
         <PARAMETER NAME="USE_BOARD_FLOW" VALUE="false"/>
         <PARAMETER NAME="RESET_BOARD_INTERFACE" VALUE="Custom"/>
         <PARAMETER NAME="EDK_IPTYPE" VALUE="PERIPHERAL"/>
       </PARAMETERS>
       <PORTS>
-        <PORT CLKFREQUENCY="99990005" DIR="I" NAME="slowest_sync_clk" SIGIS="clk" SIGNAME="zynq_ps_pl_clk0">
+        <PORT CLKFREQUENCY="187481262" DIR="I" NAME="slowest_sync_clk" SIGIS="clk" SIGNAME="zynq_ps_pl_clk0">
           <CONNECTIONS>
             <CONNECTION INSTANCE="zynq_ps" PORT="pl_clk0"/>
           </CONNECTIONS>
@@ -2502,7 +2502,7 @@
         <PORT DIR="O" LEFT="0" NAME="bus_struct_reset" POLARITY="ACTIVE_HIGH" RIGHT="0" SIGIS="rst"/>
         <PORT DIR="O" LEFT="0" NAME="peripheral_reset" POLARITY="ACTIVE_HIGH" RIGHT="0" SIGIS="rst"/>
         <PORT DIR="O" LEFT="0" NAME="interconnect_aresetn" POLARITY="ACTIVE_LOW" RIGHT="0" SIGIS="rst"/>
-        <PORT DIR="O" LEFT="0" NAME="peripheral_aresetn" POLARITY="ACTIVE_LOW" RIGHT="0" SIGIS="rst" SIGNAME="rst_zynq_ps_99M_peripheral_aresetn">
+        <PORT DIR="O" LEFT="0" NAME="peripheral_aresetn" POLARITY="ACTIVE_LOW" RIGHT="0" SIGIS="rst" SIGNAME="rst_zynq_ps_187M_peripheral_aresetn">
           <CONNECTIONS>
             <CONNECTION INSTANCE="axi_interconnect_0" PORT="ARESETN"/>
             <CONNECTION INSTANCE="axi_interconnect_0" PORT="S00_ARESETN"/>
@@ -2533,14 +2533,14 @@
         <PARAMETER NAME="EDK_IPTYPE" VALUE="BUS"/>
       </PARAMETERS>
       <PORTS>
-        <PORT CLKFREQUENCY="99990005" DIR="I" NAME="aclk" SIGIS="clk" SIGNAME="zynq_ps_pl_clk0">
+        <PORT CLKFREQUENCY="187481262" DIR="I" NAME="aclk" SIGIS="clk" SIGNAME="zynq_ps_pl_clk0">
           <CONNECTIONS>
             <CONNECTION INSTANCE="zynq_ps" PORT="pl_clk0"/>
           </CONNECTIONS>
         </PORT>
-        <PORT DIR="I" NAME="aresetn" POLARITY="ACTIVE_LOW" SIGIS="rst" SIGNAME="rst_zynq_ps_99M_peripheral_aresetn">
+        <PORT DIR="I" NAME="aresetn" POLARITY="ACTIVE_LOW" SIGIS="rst" SIGNAME="rst_zynq_ps_187M_peripheral_aresetn">
           <CONNECTIONS>
-            <CONNECTION INSTANCE="rst_zynq_ps_99M" PORT="peripheral_aresetn"/>
+            <CONNECTION INSTANCE="rst_zynq_ps_187M" PORT="peripheral_aresetn"/>
           </CONNECTIONS>
         </PORT>
         <PORT DIR="I" LEFT="0" NAME="S00_AXI_awid" RIGHT="0" SIGIS="undef" SIGNAME="idma0_m_axi_gmem0_awid">
@@ -3083,7 +3083,7 @@
         <BUSINTERFACE BUSNAME="idma0_m_axi_gmem0" DATAWIDTH="128" NAME="S00_AXI" TYPE="SLAVE" VLNV="xilinx.com:interface:aximm:1.0">
           <PARAMETER NAME="DATA_WIDTH" VALUE="128"/>
           <PARAMETER NAME="PROTOCOL" VALUE="AXI4"/>
-          <PARAMETER NAME="FREQ_HZ" VALUE="99990005"/>
+          <PARAMETER NAME="FREQ_HZ" VALUE="187481262"/>
           <PARAMETER NAME="ID_WIDTH" VALUE="1"/>
           <PARAMETER NAME="ADDR_WIDTH" VALUE="64"/>
           <PARAMETER NAME="AWUSER_WIDTH" VALUE="0"/>
@@ -3155,7 +3155,7 @@
         <BUSINTERFACE BUSNAME="odma0_m_axi_gmem0" DATAWIDTH="128" NAME="S01_AXI" TYPE="SLAVE" VLNV="xilinx.com:interface:aximm:1.0">
           <PARAMETER NAME="DATA_WIDTH" VALUE="128"/>
           <PARAMETER NAME="PROTOCOL" VALUE="AXI4"/>
-          <PARAMETER NAME="FREQ_HZ" VALUE="99990005"/>
+          <PARAMETER NAME="FREQ_HZ" VALUE="187481262"/>
           <PARAMETER NAME="ID_WIDTH" VALUE="1"/>
           <PARAMETER NAME="ADDR_WIDTH" VALUE="64"/>
           <PARAMETER NAME="AWUSER_WIDTH" VALUE="0"/>
@@ -3227,7 +3227,7 @@
         <BUSINTERFACE BUSNAME="smartconnect_0_M00_AXI" DATAWIDTH="128" NAME="M00_AXI" TYPE="MASTER" VLNV="xilinx.com:interface:aximm:1.0">
           <PARAMETER NAME="DATA_WIDTH" VALUE="128"/>
           <PARAMETER NAME="PROTOCOL" VALUE="AXI4"/>
-          <PARAMETER NAME="FREQ_HZ" VALUE="99990005"/>
+          <PARAMETER NAME="FREQ_HZ" VALUE="187481262"/>
           <PARAMETER NAME="ID_WIDTH" VALUE="0"/>
           <PARAMETER NAME="ADDR_WIDTH" VALUE="49"/>
           <PARAMETER NAME="AWUSER_WIDTH" VALUE="0"/>
@@ -4517,7 +4517,7 @@
         <PARAMETER NAME="PSU__SATA__LANE1__ENABLE" VALUE="1"/>
         <PARAMETER NAME="PSU__SATA__LANE1__IO" VALUE="GT Lane3"/>
         <PARAMETER NAME="PSU__CRF_APB__PCIE_REF_CTRL__DIVISOR0" VALUE="2"/>
-        <PARAMETER NAME="PSU__CRL_APB__PL0_REF_CTRL__DIVISOR0" VALUE="15"/>
+        <PARAMETER NAME="PSU__CRL_APB__PL0_REF_CTRL__DIVISOR0" VALUE="8"/>
         <PARAMETER NAME="PSU__CRL_APB__PL1_REF_CTRL__DIVISOR0" VALUE="4"/>
         <PARAMETER NAME="PSU__CRL_APB__PL2_REF_CTRL__DIVISOR0" VALUE="4"/>
         <PARAMETER NAME="PSU__CRL_APB__PL3_REF_CTRL__DIVISOR0" VALUE="4"/>
@@ -4710,7 +4710,7 @@
         <PARAMETER NAME="PSU__CRF_APB__AFI5_REF_CTRL__ACT_FREQMHZ" VALUE="667"/>
         <PARAMETER NAME="PSU__CRF_APB__SATA_REF_CTRL__ACT_FREQMHZ" VALUE="249.975021"/>
         <PARAMETER NAME="PSU__CRF_APB__PCIE_REF_CTRL__ACT_FREQMHZ" VALUE="249.975021"/>
-        <PARAMETER NAME="PSU__CRL_APB__PL0_REF_CTRL__ACT_FREQMHZ" VALUE="99.990005"/>
+        <PARAMETER NAME="PSU__CRL_APB__PL0_REF_CTRL__ACT_FREQMHZ" VALUE="187.481262"/>
         <PARAMETER NAME="PSU__CRL_APB__PL1_REF_CTRL__ACT_FREQMHZ" VALUE="100"/>
         <PARAMETER NAME="PSU__CRL_APB__PL2_REF_CTRL__ACT_FREQMHZ" VALUE="100"/>
         <PARAMETER NAME="PSU__CRL_APB__PL3_REF_CTRL__ACT_FREQMHZ" VALUE="100"/>
@@ -4771,7 +4771,7 @@
         <PARAMETER NAME="PSU__CRF_APB__AFI5_REF_CTRL__FREQMHZ" VALUE="667"/>
         <PARAMETER NAME="PSU__CRF_APB__SATA_REF_CTRL__FREQMHZ" VALUE="250"/>
         <PARAMETER NAME="PSU__CRF_APB__PCIE_REF_CTRL__FREQMHZ" VALUE="250"/>
-        <PARAMETER NAME="PSU__CRL_APB__PL0_REF_CTRL__FREQMHZ" VALUE="100"/>
+        <PARAMETER NAME="PSU__CRL_APB__PL0_REF_CTRL__FREQMHZ" VALUE="200"/>
         <PARAMETER NAME="PSU__CRL_APB__PL1_REF_CTRL__FREQMHZ" VALUE="100"/>
         <PARAMETER NAME="PSU__CRL_APB__PL2_REF_CTRL__FREQMHZ" VALUE="100"/>
         <PARAMETER NAME="PSU__CRL_APB__PL3_REF_CTRL__FREQMHZ" VALUE="100"/>
@@ -5044,12 +5044,12 @@
         <PARAMETER NAME="PSU__AFI1_COHERENCY" VALUE="0"/>
         <PARAMETER NAME="PSU__FPDMASTERS_COHERENCY" VALUE="0"/>
         <PARAMETER NAME="PSU__ENABLE__DDR__REFRESH__SIGNALS" VALUE="0"/>
-        <PARAMETER NAME="PSU__M_AXI_GP0__FREQMHZ" VALUE="99.990005"/>
+        <PARAMETER NAME="PSU__M_AXI_GP0__FREQMHZ" VALUE="187.481262"/>
         <PARAMETER NAME="PSU__M_AXI_GP1__FREQMHZ" VALUE="10"/>
         <PARAMETER NAME="PSU__M_AXI_GP2__FREQMHZ" VALUE="10"/>
         <PARAMETER NAME="PSU__S_AXI_GP0__FREQMHZ" VALUE="10"/>
         <PARAMETER NAME="PSU__S_AXI_GP1__FREQMHZ" VALUE="10"/>
-        <PARAMETER NAME="PSU__S_AXI_GP2__FREQMHZ" VALUE="99.990005"/>
+        <PARAMETER NAME="PSU__S_AXI_GP2__FREQMHZ" VALUE="187.481262"/>
         <PARAMETER NAME="PSU__S_AXI_GP3__FREQMHZ" VALUE="10"/>
         <PARAMETER NAME="PSU__S_AXI_GP4__FREQMHZ" VALUE="10"/>
         <PARAMETER NAME="PSU__S_AXI_GP5__FREQMHZ" VALUE="10"/>
@@ -5061,7 +5061,7 @@
         <PARAMETER NAME="C_HIGHADDR" VALUE="0xFFFFFFFFF"/>
       </PARAMETERS>
       <PORTS>
-        <PORT CLKFREQUENCY="99990005" DIR="I" NAME="maxihpm0_fpd_aclk" SIGIS="clk" SIGNAME="zynq_ps_pl_clk0">
+        <PORT CLKFREQUENCY="187481262" DIR="I" NAME="maxihpm0_fpd_aclk" SIGIS="clk" SIGNAME="zynq_ps_pl_clk0">
           <CONNECTIONS>
             <CONNECTION INSTANCE="zynq_ps" PORT="pl_clk0"/>
           </CONNECTIONS>
@@ -5253,7 +5253,7 @@
             <CONNECTION INSTANCE="axi_interconnect_0" PORT="S00_AXI_arqos"/>
           </CONNECTIONS>
         </PORT>
-        <PORT CLKFREQUENCY="99990005" DIR="I" NAME="saxihp0_fpd_aclk" SIGIS="clk" SIGNAME="zynq_ps_pl_clk0">
+        <PORT CLKFREQUENCY="187481262" DIR="I" NAME="saxihp0_fpd_aclk" SIGIS="clk" SIGNAME="zynq_ps_pl_clk0">
           <CONNECTIONS>
             <CONNECTION INSTANCE="zynq_ps" PORT="pl_clk0"/>
           </CONNECTIONS>
@@ -5432,13 +5432,13 @@
         <PORT DIR="I" LEFT="0" NAME="pl_ps_irq0" RIGHT="0" SENSITIVITY="LEVEL_HIGH" SIGIS="INTERRUPT"/>
         <PORT DIR="O" NAME="pl_resetn0" POLARITY="ACTIVE_LOW" SIGIS="rst" SIGNAME="zynq_ps_pl_resetn0">
           <CONNECTIONS>
-            <CONNECTION INSTANCE="rst_zynq_ps_99M" PORT="ext_reset_in"/>
+            <CONNECTION INSTANCE="rst_zynq_ps_187M" PORT="ext_reset_in"/>
           </CONNECTIONS>
         </PORT>
-        <PORT CLKFREQUENCY="99990005" DIR="O" NAME="pl_clk0" SIGIS="clk" SIGNAME="zynq_ps_pl_clk0">
+        <PORT CLKFREQUENCY="187481262" DIR="O" NAME="pl_clk0" SIGIS="clk" SIGNAME="zynq_ps_pl_clk0">
           <CONNECTIONS>
             <CONNECTION INSTANCE="axi_interconnect_0" PORT="ACLK"/>
-            <CONNECTION INSTANCE="rst_zynq_ps_99M" PORT="slowest_sync_clk"/>
+            <CONNECTION INSTANCE="rst_zynq_ps_187M" PORT="slowest_sync_clk"/>
             <CONNECTION INSTANCE="axi_interconnect_0" PORT="S00_ACLK"/>
             <CONNECTION INSTANCE="zynq_ps" PORT="maxihpm0_fpd_aclk"/>
             <CONNECTION INSTANCE="zynq_ps" PORT="saxihp0_fpd_aclk"/>
@@ -5457,7 +5457,7 @@
           <PARAMETER NAME="NUM_READ_OUTSTANDING" VALUE="8"/>
           <PARAMETER NAME="DATA_WIDTH" VALUE="128"/>
           <PARAMETER NAME="PROTOCOL" VALUE="AXI4"/>
-          <PARAMETER NAME="FREQ_HZ" VALUE="99990005"/>
+          <PARAMETER NAME="FREQ_HZ" VALUE="187481262"/>
           <PARAMETER NAME="ID_WIDTH" VALUE="16"/>
           <PARAMETER NAME="ADDR_WIDTH" VALUE="40"/>
           <PARAMETER NAME="AWUSER_WIDTH" VALUE="16"/>
@@ -5531,7 +5531,7 @@
           <PARAMETER NAME="NUM_READ_OUTSTANDING" VALUE="16"/>
           <PARAMETER NAME="DATA_WIDTH" VALUE="128"/>
           <PARAMETER NAME="PROTOCOL" VALUE="AXI4"/>
-          <PARAMETER NAME="FREQ_HZ" VALUE="99990005"/>
+          <PARAMETER NAME="FREQ_HZ" VALUE="187481262"/>
           <PARAMETER NAME="ID_WIDTH" VALUE="6"/>
           <PARAMETER NAME="ADDR_WIDTH" VALUE="49"/>
           <PARAMETER NAME="AWUSER_WIDTH" VALUE="1"/>

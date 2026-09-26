@@ -1875,6 +1875,56 @@ understates the datapath; the fix for the reset is a pipelined reset tree, the
 standard one. Whether the reference's 6.72 ns was also its reset cannot be checked
 — its build tree was deleted 2026-09-22.
 
+### 11.13 Rebuilt with the FIFO fix at 5 ns: 187.5 MHz, timing met — 2026-09-26
+`zynq_drone200/finn_zynq_link.runs/impl_1/top_wrapper.bit`, now
+`deploy/resizer.bit`. Same network, same folding; two changes only: the §11.12
+skip-FIFO depths, and `synth_clk_period_ns=5`. **Not yet run on the board.**
+
+| | 2026-08-15 (§10.16) | **2026-09-26** |
+|---|---|---|
+| PL clock | 100 MHz | **187.48 MHz** (asked 200; IOPLL 1499.85 / 8) |
+| WNS / WHS | +1.765 / +0.006 ns at 10 ns | **+0.550 / +0.010 ns at 5.333 ns** (≈209 MHz) |
+| CLB LUT | 82,222 (30.0%) | 82,907 (30.3%) |
+| Block RAM tile | 691 (75.8%) | **720 (79.0%)** — +29, the simulation said ~+30 |
+| power, post-route | 5.10 W (PS8 2.74) | 6.54 W (PS8 2.74) |
+
+Expected on the board, from the §11.12 simulation scaled to 187.48 MHz: interval
+1,114,135 cycles = **~5.9 ms (~168 FPS)**, single-frame latency ~4.2 M cycles =
+**~22 ms**. The reset net needed no hand-made pipeline: at 5.33 ns it became
+critical and FINN's own impl settings (`phys_opt` `AggressiveExplore`,
+post-route phys_opt on) replicated it away.
+
+**Recipe** (all in `~/finn_build_mdanilow`):
+1. `drone_v8_200/hw_config_fifofix.json` = `drone_v8_bit/final_hw_config.json`
+   with the two depths (accelerator_diagnosis.md §0). Before launching,
+   `yolov8/check_fifo_config.py` replays the `auto_fifo_depths=False` path offline
+   against the shipping model: **335 of 337 FIFO edges identical, the two skip
+   edges changed** — the guard against a silent name mismatch in `ApplyConfig`.
+2. `yolov8/build_drone_200.py` (`run_drone_200.sh`): resume at `step_hw_codegen`
+   from a copy of the old `intermediate_models/`, `auto_fifo_depths=False`,
+   `synth_clk_period_ns=5`. Codegen + ipgen of all 41 HLS layers at 5 ns: **4 min**.
+3. The §10.14 check after ipgen caught **one** unpackaged IP again
+   (`StreamingSplit_hls_4`, this time `Unable to load Tcl app xilinx::vcs`). Re-ran
+   its `ipgen.sh` alone in the container, then resumed at `step_synthesize_bitfile`.
+4. Stitch of the 946-cell partition: **12 h 56 min**. `BD 5-336` as always (§10.15);
+   harness `zynq_drone200/` + its own `ip_repo_drone200/` (694 links incl.
+   `memstream`). Synthesis + implementation + bitstream: **42 min**.
+
+**Three things to know next time:**
+- **With `generate_outputs` lacking `STITCHED_IP`, `step_create_stitched_ip` is a
+  no-op** (its checkpoint is byte-identical to `step_set_fifo_depths`'). The only
+  stitch is ZynqBuild's, *inside* `step_synthesize_bitfile`. So "stop before the
+  stitch" means stopping when that step's Vivado starts, and the stitch cannot be
+  resumed — only frozen with `docker pause`.
+- **The §10.14 HLS race recurs**: 1 of 41 on both builds. Run the check every time.
+- **`run-docker.sh` rebuilds the image** unless `FINN_DOCKER_PREBUILT=1` and
+  `FINN_DOCKER_TAG` are exported; the old `run_*.sh` scripts lack both.
+
+The driver, golden set and dequant file are unchanged: same I/O, same `idma0` /
+`odma0`, same address map in the `.hwh`. `run_on_board.py`, `FINNExampleOverlay`
+and the `tput.py` snippet now default to 187.5 MHz — **do not run the 2026-08-15
+bitstream with those defaults**; it is signed off at 100.
+
 ## 12. The camera, on the host — 2026-09-10
 
 First measurements against real hardware in this chain. All of it is host-side

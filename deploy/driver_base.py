@@ -51,7 +51,7 @@ class FINNExampleOverlay(Overlay):
         platform,
         io_shape_dict,
         batch_size=1,
-        fclk_mhz=100.0,
+        fclk_mhz=187.5,
         device=None,
         download=True,
         runtime_weight_dir="runtime_weights/",

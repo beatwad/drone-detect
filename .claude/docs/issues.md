@@ -164,7 +164,7 @@ host. See [research/pynq-on-zcu102.md](research/pynq-on-zcu102.md).
 **Solved when:** `run_on_board.py` compares real INT21 against the 60-frame
 golden set on hardware and passes at 0.05 LSB.
 
-## 9. Real throughput is 2.4× below FINN's estimate — cause found, fix not yet built; power unmeasured
+## 9. Real throughput is 2.4× below FINN's estimate — fix built, not yet on the board; power unmeasured
 
 **Measured 2026-09-23** (build_notes §11.11): single-frame latency ≈ 42 ms,
 steady-state ≈ 26.2 ms/frame ≈ **38 FPS** at 100 MHz, against FINN's **90.4 FPS**.
@@ -175,8 +175,11 @@ fork and join. In a whole-design Verilator simulation that reproduces the board
 to 64 cycles, deepening just those two FIFOs gives **11.14 ms/frame (89.8 FPS)**,
 stable, for about +30 BRAM36. Latency stays 42 ms — that part is structural.
 
-**Solved when:** the rebuilt bitstream (`final_hw_config.json` with the two
-depths, `auto_fifo_depths=False`) shows ~11.1 ms/frame on the board in
+**Fix built 2026-09-26** (build_notes §11.13), together with a 5 ns target:
+timing met at **187.48 MHz** (+0.55 ns), BRAM 720 (79.0%, +29). Now in `deploy/`.
+Expected on the board: ~5.9 ms/frame (~168 FPS), ~22 ms latency.
+
+**Solved when:** the rebuilt bitstream shows ~5.9 ms/frame at 187.5 MHz on the board in
 `accelerator_diagnosis.md`'s `tput.py`, `run_on_board.py` still passes, and board
 power is measured under a continuous frame stream.
 

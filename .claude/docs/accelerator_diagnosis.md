@@ -22,6 +22,10 @@ streamer). Full account, tooling and the traps: build_notes §11.12.
 `StreamingConcat_hls_7/5`; rebuild from that config with `auto_fifo_depths=False`
 (skips the 12.8 h sizing run). Then §2's loop on the board.
 
+**Applied 2026-09-26** (build_notes §11.13), with a 5 ns target: timing met at
+187.48 MHz, the bitstream is `deploy/resizer.bit`. Board check still to do:
+`run_on_board.py` must PASS, and §2's loop should show ~5.9 ms/frame.
+
 ## 1. The symptom, measured on the ZCU102
 
 Bitstream: `deploy/resizer.bit` = the 2026-08-15 build (build_notes §10.16),
@@ -57,7 +61,7 @@ On the board (`ssh`/serial, as root), this reproduces the table above in a few
 seconds. It is deterministic. Run it before and after any fix:
 
 ```python
-# /tmp/tput.py -- latency vs throughput of the PL alone.  FCLK=150 python3 /tmp/tput.py
+# /tmp/tput.py -- latency vs throughput of the PL alone.  FCLK=187.5 python3 /tmp/tput.py
 import os, sys, time
 sys.path.insert(0, "/home/root/deploy")
 os.environ.setdefault("XILINX_XRT", "/usr")
@@ -70,7 +74,7 @@ for b in (1, 2, 4, 8, 16, 32):
     acc = FINNExampleOverlay(bitfile_name="/home/root/deploy/resizer.bit", platform="zynq-iodma",
                              io_shape_dict=io_shape_dict, batch_size=b,
                              runtime_weight_dir="/home/root/deploy/runtime_weights/",
-                             device=Device.devices[0], fclk_mhz=float(os.environ.get("FCLK", "100")))
+                             device=Device.devices[0], fclk_mhz=float(os.environ.get("FCLK", "187.5")))
     t = []
     for _ in range(5):
         t0 = time.perf_counter(); acc.execute_on_buffers(); t.append(time.perf_counter() - t0)
