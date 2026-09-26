@@ -194,3 +194,18 @@ go/no-go for a smaller part.
 
 **Solved when:** a part is chosen against a measured footprint, with the tracker
 and preprocessing in PL (§5, §6) included in the budget rather than assumed free.
+
+## 11. Birds and aircraft are drones to the network
+
+Measured 2026-09-26 (build_notes §13): on hard negatives the shipping model
+fires on birds, airliners, jets and a helicopter at conf 0.67–0.86. False alarms
+are 10.1% of empty frames at 0.6 and 6.1% at 0.7, and no threshold separates
+them from mid-range drones (mid recall 79.3% / 62.4% at the same points). For a
+kinetic system this is the worst failure mode, and the tracker cannot fix it:
+a bird is as persistent as a drone.
+
+**Solved when:** a model trained with explicit bird / aircraft classes (or an
+equivalent rejection stage) holds close/mid recall and centre error while the
+drone-class false-alarm rate on `val_empty` falls well below today's, re-measured
+with `scripts/false_alarm.py` — and then checked on real footage through our
+lens (§1), which is the number that actually matters.

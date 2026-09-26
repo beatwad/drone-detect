@@ -2202,3 +2202,42 @@ newest frame only.
 readout — so it is a lower bound on glass-to-aim until there is a hardware
 trigger (issues §4). The scene had no drone: 0 boxes throughout, as it should.
 
+
+## 13. False alarms: birds and planes are drones to the network — 2026-09-26
+
+`scripts/false_alarm.py`, the shipping checkpoint `runs/qat/v8n_p3_w4a4` (the
+Brevitas model; the FINN graph matches it to ±1 activation step, §10.18) at the
+build geometry 192×320, one pass at a 0.10 floor. False-alarm rate = share of the
+1003 `val_empty` frames with ≥ 1 box; recall = share of labelled drones matched
+at IoU ≥ 0.5, greedy one-to-one as in `center_error.py`.
+
+| conf ≥ | 0.25 | 0.40 | 0.50 | 0.60 | 0.70 | 0.80 | 0.90 |
+|---|---|---|---|---|---|---|---|
+| **false alarms**, empty (1003) | 21.7% | 17.5% | 14.1% | 10.1% | 6.1% | 3.6% | 0.0% |
+| recall, close (1748) | 96.2 | 95.1 | 94.1 | 92.0 | 84.5 | 56.0 | 4.6 |
+| recall, mid (1987) | 89.0 | 86.0 | 83.5 | 79.3 | 62.4 | 19.9 | 0.0 |
+| recall, long (2636) | 43.4 | 38.5 | 34.0 | 27.0 | 15.5 | 0.3 | 0.0 |
+
+**Checked by eye, unlike July** (memory `empty-label-contamination`: the old
+"empty" frames were full of unlabelled drones). All 101 frames firing at ≥ 0.6
+are real non-drones: airliners, fighter jets, one helicopter, gulls, crows and
+raptors, scored **0.67–0.86**. `val_empty` is a set of hard negatives — web
+photos of birds and aircraft framed like targets — not background sky. One
+airliner video (`I_V_AIRPLANE_042`) is ~58 of the 101, so the rates are
+clip-weighted and not a field frequency; how often a bird enters *our* frame is
+unknown until there is footage (issues §1).
+
+**What follows:**
+- **No confidence threshold separates them.** Birds and aircraft land in
+  0.6–0.8, the same band as mid-range drones. At 0.8 false alarms fall to 3.6%
+  and mid recall falls to 19.9%.
+- **Multi-frame confirmation does not help against them.** It removes flicker —
+  a box that appears for a frame. A bird is a persistent object and makes a
+  steady track that passes any persistence test. `track.py`'s debounce guards
+  the *centring* decision, not the *is-it-a-drone* one.
+- The levers are **explicit bird / aircraft classes** (the net currently has
+  nowhere else to put a bird; two more output channels, negligible hardware),
+  and **kinematics** in the tracker, which needs real tracks to tune.
+
+Single stills only: the val set is de-duplicated, so nothing here measures how
+long a false box persists.
