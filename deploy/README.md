@@ -20,6 +20,7 @@ lands on the card.
 | `capture.py` | camera → centre 320×192 RGB window: V4L2 via ioctl + mmap, 1280×720 YUYV, newest frame only |
 | `yuyv.c`, `libyuyv.so` | the window's YUYV → RGB in C, cross-compiled for the A53 (build line in the `.c`); `capture.py` falls back to NumPy without it |
 | `live.py` | the whole chain: camera → accelerator → `decode_confident` → tracker, one status line a second |
+| `pipeline.py` | up to K frames in the accelerator at once, results in order; used by `live.py` and `run_on_board.py` (`--depth`, default 3) |
 | `pynq_offline/` | a pure-Python PYNQ 3.0.1 and its aarch64 wheels, so the board needs neither network nor compiler. See its README |
 | `boot/` | `BOOT.BIN`, `image.ub`, `boot.scr` for the FAT32 partition, `rootfs.tar.gz` for the ext4 one, and the `.xsa` the image was built from |
 | `petalinux/` | how that image is built, on the host |
@@ -140,6 +141,11 @@ The output above is from the 2026-08-15 bitstream at 100 MHz. The current one
 is safe, just slower. The first line prints the frequency the PLL actually
 landed on. For the steady-state interval use `FCLK=187.5 python3 /tmp/tput.py`
 (accelerator_diagnosis.md §2).
+
+After the comparison, `run_on_board.py` runs the same frames again through
+`pipeline.py` with `--depth` (default 3) frames in flight and prints a
+`pipelined, depth 3: ... FPS, identical to one-at-a-time: True` line; `False`
+fails the check. `--depth 1` skips it.
 
 ### If it goes wrong
 

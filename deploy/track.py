@@ -37,11 +37,17 @@ import numpy as np
 CONF_THR = 0.25        # seed/candidate confidence
 IOU_CLUSTER = 0.55     # boxes this close to the seed are the same drone
 IOU_GATE = 0.30        # measurement still agrees with the prediction
-MISS_LIMIT = 5         # consecutive gate failures before re-seeding
+# The two persistence windows are in SECONDS, not frames, so that the protection
+# they give does not shrink when the frame rate rises. At the 18.6 FPS measured
+# on 2026-09-23 they match the old frame counts: re-seed on the 6th consecutive
+# miss (5 intervals = 0.27 s; 0.25 leaves room for jitter), flip the centring
+# flag on the 3rd disagreeing frame (2 intervals = 0.11 s). Both need at least
+# two frames, whatever dt is.
+MISS_S = 0.25          # gate failing this long (since the first miss) -> re-seed
 ALPHA, BETA = 0.6, 0.2  # alpha-beta gains: position, velocity
 SIZE_EMA = 0.5         # box size smoothing
 D_LOW, D_HIGH = 0.010, 0.020   # centring hysteresis, fraction of frame diagonal
-DEBOUNCE = 3           # frames a gate decision must hold before it flips
+DEBOUNCE_S = 0.10      # a gate decision must hold this long before it flips
 
 
 class Aim(NamedTuple):
@@ -86,26 +92,26 @@ class AimTracker:
     """README §11, one instance per camera. Call `update` once per frame."""
 
     def __init__(self, frame_wh, conf_thr=CONF_THR, iou_cluster=IOU_CLUSTER,
-                 iou_gate=IOU_GATE, miss_limit=MISS_LIMIT,
-                 d_low=D_LOW, d_high=D_HIGH, debounce=DEBOUNCE):
+                 iou_gate=IOU_GATE, miss_s=MISS_S,
+                 d_low=D_LOW, d_high=D_HIGH, debounce_s=DEBOUNCE_S):
         self.w, self.h = frame_wh
         self.centre = np.array([self.w / 2.0, self.h / 2.0])
         self.diag = float(np.hypot(self.w, self.h))
         self.conf_thr, self.iou_cluster, self.iou_gate = conf_thr, iou_cluster, iou_gate
-        self.miss_limit, self.d_low, self.d_high, self.debounce = miss_limit, d_low, d_high, debounce
+        self.miss_s, self.d_low, self.d_high, self.debounce_s = miss_s, d_low, d_high, debounce_s
         self._reset()
 
     def _reset(self):
         self.pos = None          # filter state: centre, velocity (px, px/s), size
         self.vel = np.zeros(2)
         self.size = None
-        self.miss = 0
+        self.miss = None         # seconds since the first consecutive gate failure
         self.recent = []         # measurements collected while the gate is failing
         self.close_enough = False
-        self._pending = 0        # debounce counter for the centring gate
+        self._pending = None     # seconds the centring gate has wanted to flip
 
     # ---- step 7: hysteresis + debounce ------------------------------------
-    def _centring_gate(self, dist):
+    def _centring_gate(self, dist, dt):
         want = self.close_enough
         if dist < self.d_low:
             want = True
@@ -113,12 +119,14 @@ class AimTracker:
             want = False
         # between D_low and D_high the flag holds — that is the hysteresis.
         if want == self.close_enough:
-            self._pending = 0
+            self._pending = None
         else:
-            self._pending += 1
-            if self._pending >= self.debounce:
+            # timed from the first disagreeing frame, so its own dt (time spent
+            # in the old state) does not count
+            self._pending = 0.0 if self._pending is None else self._pending + dt
+            if self._pending >= self.debounce_s:
                 self.close_enough = want
-                self._pending = 0
+                self._pending = None
         return self.close_enough
 
     def _no_track(self):
@@ -134,7 +142,7 @@ class AimTracker:
         keep = scores >= self.conf_thr
         if not keep.any():
             self.close_enough = False
-            self._pending = 0
+            self._pending = None
             return self._no_track()
         cand, cand_s = boxes[keep], scores[keep]
         d = np.hypot(*(np.stack([_centre(b) for b in cand]) - self.centre).T)
@@ -149,7 +157,7 @@ class AimTracker:
         # first measurement: initialise and report a track but no aim yet
         if self.pos is None:
             self.pos, self.vel, self.size = z_c, np.zeros(2), z_size
-            self.miss, self.recent = 0, []
+            self.miss, self.recent = None, []
             return self._no_track()
 
         # 4. predict
@@ -158,14 +166,14 @@ class AimTracker:
 
         # 5. gate
         if _iou_1_to_n(measured, pred_box.reshape(1, 4))[0] <= self.iou_gate:
-            self.miss += 1
+            self.miss = 0.0 if self.miss is None else self.miss + dt
             self.recent.append(measured)
-            if self.miss > self.miss_limit:
+            if self.miss >= self.miss_s:
                 self._reseed(dt)
             self.close_enough = False
-            self._pending = 0
+            self._pending = None
             return self._no_track()
-        self.miss, self.recent = 0, []
+        self.miss, self.recent = None, []
 
         # 6. update — alpha-beta correction on the prediction
         resid = z_c - pred_c
@@ -176,7 +184,7 @@ class AimTracker:
 
         offset = self.pos - self.centre
         dist = float(np.hypot(*offset)) / self.diag
-        return Aim(self._centring_gate(dist), (float(offset[0]), float(offset[1])),
+        return Aim(self._centring_gate(dist, dt), (float(offset[0]), float(offset[1])),
                    dist, _box_from(self.pos, self.size), True)
 
     def _reseed(self, dt):
@@ -198,4 +206,4 @@ class AimTracker:
         # to be divided by dt as well — dropping that is a silent factor of ~1/fps.
         span = max(len(run) - 1, 1) * max(dt, 1e-6)
         self.vel = (_centre(run[-1]) - _centre(run[0])) / span if len(run) > 1 else np.zeros(2)
-        self.miss, self.recent = 0, []
+        self.miss, self.recent = None, []

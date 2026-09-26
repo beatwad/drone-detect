@@ -569,7 +569,7 @@ turns detections into an aim command is specified in §11 and **not implemented*
 
 **What is and is not done.** The algorithm is written and exercised on synthetic
 tracks: it converges on a crossing target, holds state through a detection
-dropout, rejects a teleporting outlier and re-seeds after `MISS_LIMIT`, holds the
+dropout, rejects a teleporting outlier and re-seeds after `MISS_S`, holds the
 centring flag inside the hysteresis band and drops it on a slow drift past
 `D_high`. It has **never seen a real detection**, never run on the board, and
 **every threshold in it is a guess** — no footage exists through the real lens
@@ -610,13 +610,13 @@ trigger, and until there is one, `dt` is only as good as the timestamp available
 5. Gate          IoU(measured, predicted) > thresh_frame_iou ?
                    yes -> miss_counter = 0
                    no  -> miss_counter += 1, append measured to the recent list
-                          if miss_counter > M:
+                          if the gate has failed for >= MISS_S seconds:
                               re-seed the filter from the last consecutive boxes
                               that agree with each other by thresh_frame_iou
                           close_enough = False, exit.
 6. Update        Kalman update -> smoothed centre -> offset from frame centre,
                  and its magnitude `dist`.
-7. Centring gate hysteresis on `dist` (D_low / D_high) + debounce over N frames
+7. Centring gate hysteresis on `dist` (D_low / D_high) + debounce, DEBOUNCE_S seconds
                  -> close_enough.
 ```
 

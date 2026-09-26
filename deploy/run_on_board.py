@@ -131,6 +131,9 @@ def main():
                    help="PL clock in MHz, set after the bitstream loads. The 2026-09-26 "
                         "bitstream is signed off at 187.5 (IOPLL/8, +0.55 ns); lower is "
                         "always safe. The PLL gives 1499.85/N: 150, 166.7, 187.5")
+    p.add_argument("--depth", type=int, default=3,
+                   help="then run the same frames through pipeline.py with this many "
+                        "in flight; must match the one-at-a-time output exactly (1 = skip)")
     args = p.parse_args()
 
     if args.self_test:
@@ -193,6 +196,22 @@ def main():
         print(f"    frame {k}: {lsb[k].max():.3e} LSB")
 
     ok = lsb.max() <= TOL_LSB
+    if args.depth > 1:
+        from pipeline import AccelPipeline
+        pipe = AccelPipeline(accel, depth=args.depth)
+        piped, sent, t0 = [], 0, time.perf_counter()
+        while len(piped) < len(x):
+            while sent < len(x) and pipe.can_submit():
+                pipe.submit(x[sent : sent + 1], sent)
+                sent += 1
+            r = pipe.poll()
+            if r is not None:
+                piped.append(r[1][0])
+        t = time.perf_counter() - t0
+        same = np.array_equal(np.stack(piped), raw)
+        print(f"\npipelined, depth {args.depth}: {len(x)} frames in {1e3 * t:.1f} ms -> "
+              f"{len(x) / t:.1f} FPS (pack + unpack included), identical to one-at-a-time: {same}")
+        ok = ok and same
     print("\n" + ("PASS — hardware matches the simulated graph"
                   if ok else "FAIL — hardware disagrees with the simulation"))
     return 0 if ok else 1
