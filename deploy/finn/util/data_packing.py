@@ -27,12 +27,24 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import binascii
+import ctypes
 import numpy as np
 import os
 import sys
 from bitstring import BitArray
 from qonnx.core.datatype import DataType
 from qonnx.util.basic import roundup_to_integer_multiple
+
+# deploy/unpack.c, cross-compiled for the A53 (not in upstream FINN). Absent or
+# unloadable -- any host -- and the NumPy fast path below is used instead.
+try:
+    _unpack = ctypes.CDLL(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "libunpack.so")
+    ).unpack_le_fields
+    _unpack.argtypes = [ctypes.c_void_p, ctypes.c_long] + [ctypes.c_int] * 5 + [ctypes.c_void_p]
+    _unpack.restype = None
+except OSError:
+    _unpack = None
 
 
 def array2hexstring(array, dtype, pad_to_nbits, prefix="0x", reverse=False):
@@ -444,11 +456,19 @@ def packed_bytearray_to_finnpy(
     # FINN: the hex-string path below takes ~25 s per frame on the A53 here.
     # With double reverse the packed dim is one little-endian integer whose
     # lowest target_bits hold element 0. Up to 8 bytes, read it as one uint64
-    # and shift fields out (6.4 ms/frame on the A53); np.unpackbits, which costs
-    # a byte per bit, is kept only for wider packings (41 ms/frame there).
+    # and shift fields out -- in C via libunpack.so if it loaded, else NumPy
+    # (7 ms/frame on the A53); np.unpackbits, which costs a byte per bit, is
+    # kept only for wider packings (41 ms/frame there).
     if double_reverse and fast_mode and dtype.is_integer() and target_bits <= 62:
         n = output_shape[-1]
         nbytes = packed_bytearray.shape[-1]
+        if nbytes <= 8 and _unpack is not None:
+            src = np.ascontiguousarray(packed_bytearray)
+            out = np.empty(output_shape, dtype=np.float32)
+            bipolar = dtype == DataType["BIPOLAR"]
+            _unpack(src.ctypes.data, src.size // nbytes, nbytes, n, target_bits,
+                    int(dtype.signed() and not bipolar), int(bipolar), out.ctypes.data)
+            return out
         if nbytes <= 8:
             word = np.zeros(packed_bytearray.shape[:-1] + (8,), dtype=np.uint8)
             word[..., :nbytes] = packed_bytearray
