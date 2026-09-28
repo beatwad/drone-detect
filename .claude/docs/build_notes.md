@@ -1925,6 +1925,70 @@ The driver, golden set and dequant file are unchanged: same I/O, same `idma0` /
 and the `tput.py` snippet now default to 187.5 MHz — **do not run the 2026-08-15
 bitstream with those defaults**; it is signed off at 100.
 
+### 11.14 The rebuilt bitstream on the board: as predicted — 2026-09-28
+
+`run_on_board.py` at 187.5 MHz (`Clocks.fclk0_mhz` reads back **187.50**):
+**PASS, 0 of 3,744,000 outputs off**, max 0.000 LSB; the same 60 frames through
+`pipeline.py` at depth 3 are identical to one-at-a-time, 60 in 668.9 ms =
+**89.7 FPS** including pack and unpack.
+
+`tput.py` (`execute_on_buffers()` at batch *b*, median of 5):
+
+| batch | total ms | ms/frame | FPS |
+|---|---|---|---|
+| 1 | 22.60 | 22.60 | 44.2 |
+| 2 | 28.54 | 14.27 | 70.1 |
+| 4 | 40.42 | 10.10 | 99.0 |
+| 8 | 64.17 | 8.02 | 124.7 |
+| 16 | 111.67 | 6.98 | 143.3 |
+| 32 | 206.69 | 6.46 | 154.8 |
+
+**Steady-state interval (206.69 − 111.67) / 16 = 5.94 ms = 168 FPS, latency
+22.6 ms** — against §11.13's prediction of ~5.9 ms / ~168 FPS / ~22 ms. The
+simulation-derived fix transferred to silicon with no surprise: 26.2 → 5.94 ms
+(×4.4), 42.2 → 22.6 ms (×1.87, the clock alone).
+
+**The live chain** (`live.py`, camera 1280×720 @200, 600 frames), ms:
+
+| stage | depth 3 median | p95 | max | depth 1 median |
+|---|---|---|---|---|
+| wait frame (incl. YUYV → RGB) | 1.48 | 1.55 | 1.65 | 1.51 |
+| submit (pack + flush + DMA start) | 0.47 | 0.76 | 1.89 | 0.56 |
+| in PL | 23.18 | 23.65 | 24.93 | 23.15 |
+| unpack INT21 | 7.00 | 7.50 | 9.03 | 7.59 |
+| `decode_confident` | 1.64 | 1.96 | 2.07 | 1.82 |
+| `track.update` | 0.13 | 0.17 | 0.20 | 0.13 |
+| **age at aim** | **43.63** | 46.66 | 50.07 | 44.40 |
+| **loop rate** | **85.7 FPS** | | | 28.8 FPS |
+
+Against §12.8 (2026-09-23, old bitstream, no pipeline): 18.6 → **85.7 FPS**,
+age at aim 64.6 → **43.6 ms**. Depth 3 buys ×3 the frame rate for the same age
+(43.6 vs 44.4 ms), as `pipeline.py`'s host model said. The CPU side is now the
+larger share of what is left after the PL: unpack 7.0 ms is the biggest term.
+`age at aim` starts at the driver timestamp, so it is still a lower bound on
+glass-to-aim (issues §4).
+
+**Unpack moved to C, same day.** `deploy/unpack.c` → `libunpack.so` (Vitis
+aarch64 gcc, `-nostdlib`, 5.7 KB), called from `data_packing.py`'s fast path
+when it loads, NumPy otherwise. Checked against the NumPy path and FINN's
+hex-string path on the same 17 dtype/width cases; `run_on_board.py` still PASSES
+bit-exact. On the board:
+
+| | NumPy unpack | C unpack |
+|---|---|---|
+| `live.py` "unpack" (invalidate + copy + unpack) | 7.00 ms | **2.55 ms** |
+| live loop, depth 3 | 85.7 FPS | **99.5 FPS** |
+| age at aim, median / p95 / max | 43.6 / 46.7 / 50.1 ms | **38.4 / 40.9 / 44.5 ms** |
+| `run_on_board.py` pipelined, depth 3 | 89.7 FPS | **105.9 FPS** |
+
+What remains of the age after the PL's 23.1 ms is ~15 ms: frame age at read
+(~6 ms, §12.7), YUYV → RGB 1.5, submit 0.5, unpack 2.6, decode 1.5, track 0.1,
+and queueing behind the frames ahead in the pipeline.
+
+Seen once in the kernel log during the run, harmless so far: `usb 2-1: Could not
+enable U1 link state, xHCI error -22` — a USB 3 low-power state the camera
+refused; streaming was unaffected.
+
 ## 12. The camera, on the host — 2026-09-10
 
 First measurements against real hardware in this chain. All of it is host-side
@@ -2202,6 +2266,43 @@ newest frame only.
 readout — so it is a lower bound on glass-to-aim until there is a hardware
 trigger (issues §4). The scene had no drone: 0 boxes throughout, as it should.
 
+
+### 12.9 What the driver timestamp means, and where the frame age goes — 2026-09-28
+
+`live.py` now also reports **age at read** (driver timestamp → RGB window in
+hand). On the board, depth 3, C unpack, 600 frames: **11.04 ms median** (p95
+13.66, max 17.14), and 11.04 + submit 0.47 + PL 23.13 + unpack 2.56 + decode 1.49
++ track 0.12 ≈ the 38.34 ms age at aim — so there is no hidden queueing in the
+pipeline; the whole remainder is age at read.
+
+**The uvcvideo timestamp is the arrival of the frame's first USB packet, not the
+start of exposure.** DQBUF'ing every frame with nothing else running, time from
+timestamp to DQBUF, under manual exposure:
+
+| mode | exposure | frame interval | stamp → DQBUF, median / p95 |
+|---|---|---|---|
+| 1280×720 @200 | 0.5 ms | — | 5.33 / 5.68 ms |
+| 1280×720 @200 | 3.0 ms | 4.75 ms | 5.31 / 5.68 ms |
+| 1280×720 @30 | 0.5 ms | 33.25 ms | 33.42 / 33.48 ms |
+| 1280×720 @30 | 5.0 ms | 33.25 ms | 33.42 / 33.47 ms |
+| 1280×720 @30 | 20.0 ms | 33.25 ms | 33.45 / 33.51 ms |
+
+Independent of exposure, and with `uvcvideo` `trace=0x1000` there is not one
+clock-recovery message: the driver does **not** move the stamp back to the
+camera's PTS. So every "age" in this file is a lower bound, and **glass-to-aim ≈
+exposure + age at aim**, exposure uncounted.
+
+**The camera trickles each frame over the whole frame interval** — 33 ms from
+first packet to complete frame at 30 fps, 5.3 ms at "200". That is why 720p @200
+beat 512×512 @120 (§12.7): the frame rate, not the byte count, sets how long a
+frame takes to arrive. Of the 11.04 ms age at read: ~5.3 ms transfer (fixed by
+the mode), 1.5 ms YUYV → RGB, and ~4 ms waiting to be picked up — half an
+interval on average (~2 ms, inherent to newest-frame-only) plus ~2 ms of capture
+thread scheduling / GIL.
+
+Under manual exposure 720p "@200" ran at ~210 fps rather than the ~249 fps seen
+under auto exposure. Once in the kernel log: `xhci-hcd: WARN: HC couldn't access
+mem fast enough for slot 1 ep 2`; no frames were lost.
 
 ## 13. False alarms: birds and planes are drones to the network — 2026-09-26
 

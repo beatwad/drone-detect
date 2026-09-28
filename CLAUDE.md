@@ -153,8 +153,12 @@ Key facts, all detailed in [build_notes.md](.claude/docs/build_notes.md):
    run the old bitstream with those defaults. Expected ~5.9 ms/frame (~168 FPS),
    ~22 ms latency. Recipe traps: the §10.14 HLS race recurs, the only stitch is
    inside `step_synthesize_bitfile` (12 h 56 min), `BD 5-336` needs the harness.
-13. **NEXT:** confirm on the board (`run_on_board.py` PASS, `tput.py` interval);
-   measure board power under load; point the camera at a drone.
+13. **Confirmed on the board — 2026-09-28**, build_notes §11.14. PASS bit-exact
+   at 187.5 MHz; PL **5.94 ms/frame (168 FPS), 22.6 ms latency**, as predicted.
+   Live chain at pipeline depth 3, INT21 unpack in C (`libunpack.so`, 7 → 2.6
+   ms): **99.5 FPS, 38.4 ms median age at aim** (p95 40.9; was 18.6 FPS /
+   64.6 ms on 2026-09-23).
+14. **NEXT:** measure board power under load; point the camera at a drone.
 
 6. **The whole YOLOv5 line was removed 2026-08-20** — vendored `yolov5/`, its
    QAT and export scripts, and the `pico` / `n_eighth` / `relu` configs. It had
@@ -313,7 +317,7 @@ Key facts, all detailed in [build_notes.md](.claude/docs/build_notes.md):
   `deploy/` — **is** the board's `/home/root/deploy`: `resizer.bit/.hwh`,
   `driver_base.py`, trimmed `finn/` + `qonnx/`, `inputs.npz` + `out_hw.npz`,
   `postprocess.py` `run_on_board.py` `track.py` `capture.py` `live.py`
-  `libyuyv.so` (+ `yuyv.c`), `pynq_offline/` (the wheel and
+  `libyuyv.so` (+ `yuyv.c`) `libunpack.so` (+ `unpack.c`), `pynq_offline/` (the wheel and
   32 aarch64 wheels), `boot/` (BOOT.BIN, image.ub, boot.scr, the .xsa), and
   `petalinux/` (builds the image, host side). See `deploy/README.md`.
   No vendored model code — `ultralytics` comes from `.venv/`.
