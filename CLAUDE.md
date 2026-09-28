@@ -13,6 +13,9 @@ Full source docs live in [.claude/docs/](.claude/docs/):
 - [accelerator_diagnosis.md](.claude/docs/accelerator_diagnosis.md) — why the PL
   runs 2.4× slower than FINN estimated: loop, exclusions, ranked hypotheses, and
   the steps to run on the old PC where the build tree lives.
+- [latency_options.md](.claude/docs/latency_options.md) — where the 36 ms goes
+  now and what each remaining lever (exposure, folding, MIPI, clock, model)
+  would gain and cost. Undecided; to be weighed on the old PC.
 - [issues.md](.claude/docs/issues.md) — open problems, each with what "solved"
   would look like. The unglamorous list: no real footage yet, no lens, no
   trigger, USB where MIPI belongs.
@@ -158,7 +161,9 @@ Key facts, all detailed in [build_notes.md](.claude/docs/build_notes.md):
    Live chain at pipeline depth 3, INT21 unpack in C (`libunpack.so`, 7 → 2.6
    ms): **99.5 FPS, 38.4 ms median age at aim** (p95 40.9; was 18.6 FPS /
    64.6 ms on 2026-09-23).
-14. **NEXT:** measure board power under load; point the camera at a drone.
+14. **NEXT:** measure board power under load; point the camera at a drone; pick
+   the next latency lever from `latency_options.md` (software is ~exhausted at
+   35.8 ms age at aim; the big ones are exposure, folding, MIPI).
 
 6. **The whole YOLOv5 line was removed 2026-08-20** — vendored `yolov5/`, its
    QAT and export scripts, and the `pico` / `n_eighth` / `relu` configs. It had
