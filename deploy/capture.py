@@ -16,8 +16,8 @@ WHICH MODE, AND WHY 1280x720
   window sits 4-5 px off the sensor centre, (316, 236) not (320, 240).
 
 ONLY THE NEWEST FRAME
-  A thread dequeues continuously, copies the raw window out and requeues the
-  buffer at once. `read()` returns the newest frame not yet seen and counts the
+  A thread dequeues continuously, converts the window to RGB straight out of
+  the driver's buffer (libyuyv; see _loop) and requeues the buffer at once. `read()` returns the newest frame not yet seen and counts the
   ones it skipped. A queue would feed the detector ever older images while
   reporting a healthy rate; for aiming a stale frame is worse than none.
 
@@ -175,8 +175,16 @@ class Camera:
         return b
 
     def _loop(self):
+        # With libyuyv the thread converts every frame straight out of the driver's
+        # buffer, GIL released: read() then hands over a finished RGB window and
+        # the 1.5 ms conversion is off the latency path (~40% of one A53 at 249
+        # fps). Without it, NumPy's 13 ms would starve the thread, so it copies the
+        # raw window and read() converts only the frames actually used.
         rows = slice(self.y0, self.y0 + OUT_H)
         cols = slice(2 * self.x0, 2 * (self.x0 + OUT_W))
+        p8 = ctypes.POINTER(ctypes.c_uint8)
+        frames = [np.frombuffer(m, np.uint8, self.stride * self.h) for m in self.bufs]
+        ptrs = [f.ctypes.data_as(p8) for f in frames]
         while self._run:
             if not select.select([self.fd], [], [], 1.0)[0]:
                 continue
@@ -185,12 +193,17 @@ class Camera:
             i = struct.unpack_from("<I", b, 0)[0]
             sec, usec = struct.unpack_from("<2q", b, 24)
             seq = struct.unpack_from("<I", b, 56)[0]
-            frame = np.frombuffer(self.bufs[i], np.uint8, self.stride * self.h)
-            window = frame.reshape(self.h, self.stride)[rows, cols].copy()
+            if _lib is not None:
+                out = np.empty((OUT_H, OUT_W, 3), np.uint8)
+                _lib.yuyv_window_to_rgb(ptrs[i], self.stride, self.x0, self.y0,
+                                        OUT_W, OUT_H, out.ctypes.data_as(p8))
+            else:
+                out = frames[i].reshape(self.h, self.stride)[rows, cols].copy()
             fcntl.ioctl(self.fd, VIDIOC_QBUF, b)
             with self._lock:
-                self._latest = (window, sec + usec * 1e-6, seq)
+                self._latest = (out, sec + usec * 1e-6, seq)
                 self._lock.notify_all()
+        del frames, ptrs                          # release the mmaps for close()
 
     def read(self, timeout=5.0):              # the first frame can take ~2 s
         """Newest unseen frame -> ((1, 192, 320, 3) RGB uint8, CLOCK_MONOTONIC stamp)."""
@@ -198,11 +211,11 @@ class Camera:
             if not self._lock.wait_for(lambda: self._latest and self._latest[2] != self._seen,
                                        timeout):
                 raise TimeoutError("no frame from the camera")
-            window, t, seq = self._latest
+            out, t, seq = self._latest
         if self._seen >= 0:
             self.skipped += seq - self._seen - 1
         self._seen = seq
-        return window_to_rgb(window)[None], t
+        return (out if _lib is not None else window_to_rgb(out))[None], t
 
     def close(self):
         self._run = False

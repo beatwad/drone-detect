@@ -2304,6 +2304,60 @@ Under manual exposure 720p "@200" ran at ~210 fps rather than the ~249 fps seen
 under auto exposure. Once in the kernel log: `xhci-hcd: WARN: HC couldn't access
 mem fast enough for slot 1 ep 2`; no frames were lost.
 
+### 12.10 A 24-minute run with real detections — 2026-09-28
+
+`live.py --led`, depth 3, C unpack, camera pointed at drone images for part of
+the time: **146,900 frames at 100.3 FPS**, ~24 min, no crash, no drift.
+
+| stage | median | p95 | max |
+|---|---|---|---|
+| age at read | 11.52 | 14.96 | 233.77 |
+| wait frame | 1.51 | 1.60 | 3.75 |
+| submit | 0.49 | 0.75 | 2.20 |
+| in PL | 23.12 | 24.26 | 245.68 |
+| unpack | 2.56 | 2.74 | 6.72 |
+| decode | 1.54 | 1.91 | 226.19 |
+| track | 0.14 | 2.49 | 10.17 |
+| **age at aim** | **39.90** | 44.33 | **261.97** |
+
+- **Medians hold over 24 minutes** (age at aim 39.9 vs 38.3 ms in the 600-frame
+  runs of §12.9); the PL stays at 23.1 ms. Nothing heats up or leaks.
+- **The tracker's tail grows with real boxes:** p95 0.16 → 2.49 ms, max 10 ms —
+  clustering and WBF over up to ~12 boxes. Still small at 100 FPS.
+- **At least one whole-system stall of ~230 ms**: it shows in three independent
+  stages at once (age at read, in PL, decode), so it is the process or the OS,
+  not a stage — a GC pause, the scheduler, an SD-card write, or the console
+  switch-over during the run; the summary cannot say which or how often. p95 is
+  unaffected. For aiming a 260 ms gap is a missed target, so the next probe is to
+  log every frame over ~100 ms with its timestamp.
+- DS50 (`--led`) followed the detections; `CENTRED` never fired — the centring
+  thresholds in `track.py` are still placeholders.
+
+### 12.11 Shaving the CPU side: GIL switching, conversion in the capture thread — 2026-09-28
+
+Of the 10.9–11.5 ms age at read, ~5.3 ms is USB transfer (§12.9), ~2 ms half an
+interval, 1.5 ms YUYV → RGB — leaving ~2–3 ms. First suspect: the capture thread
+waiting for the GIL while the main loop polls the DMAs, since Python hands the
+GIL over only every 5 ms by default. 600 frames each, depth 3, C unpack:
+
+| | GIL switch 5 ms (default) | 0.2 ms | conversion in capture thread |
+|---|---|---|---|
+| age at read, median / p95 | 11.42 / 15.17 | 10.88 / 14.00 | 9.93 / 12.53 |
+| wait frame | 1.53 | 1.51 | **0.06** |
+| **age at aim**, median / p95 / max | 39.48 / 43.42 / 47.15 | 38.41 / 42.43 / 47.24 | **37.74 / 40.72 / 46.44** |
+| loop rate | 97.0 FPS | 98.0 FPS | **103.4 FPS** |
+
+- **GIL switching (`live.py --gil-switch`, default now 0.2 ms): ~−1 ms**, single
+  runs, at the edge of noise. The GIL is not where the missing 2–3 ms went.
+- **Conversion in the capture thread** (`capture.py`): libyuyv now crops and
+  converts straight out of the driver's mmap buffer before QBUF, GIL released
+  by ctypes, ~40% of one A53 at ~210–249 fps; `read()` hands over a finished
+  window. The main loop's wait falls 1.5 → 0.06 ms, but age at aim only −0.7 ms:
+  each frame is now published 1.5 ms later, so the gain is only that the chosen
+  frame no longer waits a *second* time. Frame rate +5 FPS, p95 −1.7 ms.
+- Still unexplained: ~2 ms of age at read — presumably the capture thread's own
+  Python per frame (select, DQBUF, QBUF, notify). Not yet measured.
+
 ## 13. False alarms: birds and planes are drones to the network — 2026-09-26
 
 `scripts/false_alarm.py`, the shipping checkpoint `runs/qat/v8n_p3_w4a4` (the

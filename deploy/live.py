@@ -22,6 +22,7 @@ age (+12 ms), because the extra frame waits for the CPU.
 """
 import argparse
 import os
+import sys
 import time
 
 import numpy as np
@@ -43,7 +44,11 @@ def main():
     p.add_argument("--depth", type=int, default=3, help="frames in the accelerator at once")
     p.add_argument("--led", action="store_true",
                    help="light DS50 while the latest frame has a box above --conf")
+    p.add_argument("--gil-switch", type=float, default=0.2,
+                   help="ms a thread may hold the GIL while another waits (Python's "
+                        "default is 5): the capture thread waits on the polling main loop")
     args = p.parse_args()
+    sys.setswitchinterval(args.gil_switch * 1e-3)
 
     os.environ.setdefault("XILINX_XRT", "/usr")          # see run_on_board.py
     os.makedirs("/lib/firmware", exist_ok=True)
