@@ -1,0 +1,25 @@
+# Starts live.py in button mode at boot: SW19 starts and stops detection, DS50
+# blinks while idle and lights while a drone is in the frame. Output goes to the
+# journal: `journalctl -u drone-detect -f`.
+#
+# Install on the board (as root):
+#   cp /home/root/deploy/drone-detect.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now drone-detect
+# Stop it before running live.py or run_on_board.py by hand -- both want the
+# accelerator and the camera:  systemctl stop drone-detect
+
+[Unit]
+Description=Drone detector, started and stopped with SW19
+After=multi-user.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/root/deploy
+Environment=XILINX_XRT=/usr
+ExecStartPre=-/sbin/modprobe zocl
+ExecStart=/usr/bin/python3 -u /home/root/deploy/live.py --button
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

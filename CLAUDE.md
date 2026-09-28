@@ -161,6 +161,9 @@ Key facts, all detailed in [build_notes.md](.claude/docs/build_notes.md):
    Live chain at pipeline depth 3, INT21 unpack in C (`libunpack.so`, 7 → 2.6
    ms): **99.5 FPS, 38.4 ms median age at aim** (p95 40.9; was 18.6 FPS /
    64.6 ms on 2026-09-23).
+    `live.py --button` + `deploy/drone-detect.service` (enabled on the board):
+    at boot it waits with DS50 blinking; SW19 starts/stops detection, DS50 lit
+    while a drone is in frame. Stop the service before running scripts by hand.
 14. **NEXT:** measure board power under load; point the camera at a drone; pick
    the next latency lever from `latency_options.md` (software is ~exhausted at
    35.8 ms age at aim; the big ones are exposure, folding, MIPI).

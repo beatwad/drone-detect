@@ -20,7 +20,8 @@ lands on the card.
 | `capture.py` | camera → centre 320×192 RGB window: V4L2 via ioctl + mmap, 1280×720 YUYV, newest frame only |
 | `yuyv.c`, `libyuyv.so` | the window's YUYV → RGB in C, cross-compiled for the A53 (build line in the `.c`); `capture.py` falls back to NumPy without it |
 | `unpack.c`, `libunpack.so` | INT21 output unpack in C for `finn/util/data_packing.py`'s fast path (build line in the `.c`); NumPy fallback without it |
-| `live.py` | the whole chain: camera → accelerator → `decode_confident` → tracker, one status line a second; `--led` lights DS50 (green, by SW19) while a frame holds a detection |
+| `live.py` | the whole chain: camera → accelerator → `decode_packed` → tracker, one status line a second; `--led` lights DS50 (green, by SW19) while a frame holds a detection; `--button` lets SW19 start and stop detection |
+| `drone-detect.service` | systemd unit running `live.py --button` at boot; install steps in its header |
 | `pipeline.py` | up to K frames in the accelerator at once, results in order; used by `live.py` and `run_on_board.py` (`--depth`, default 3) |
 | `pynq_offline/` | a pure-Python PYNQ 3.0.1 and its aarch64 wheels, so the board needs neither network nor compiler. See its README |
 | `boot/` | `BOOT.BIN`, `image.ub`, `boot.scr` for the FAT32 partition, `rootfs.tar.gz` for the ext4 one, and the `.xsa` the image was built from |
@@ -147,6 +148,22 @@ After the comparison, `run_on_board.py` runs the same frames again through
 `pipeline.py` with `--depth` (default 3) frames in flight and prints a
 `pipelined, depth 3: ... FPS, identical to one-at-a-time: True` line; `False`
 fails the check. `--depth 1` skips it.
+
+### 7. Detection at the press of a button
+
+```bash
+cp /home/root/deploy/drone-detect.service /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now drone-detect
+```
+
+From then on the board needs no console: ~25 s after power-on the detector is
+loaded and waiting, **DS50 blinks**. **SW19** (the pushbutton next to DS50)
+starts detection — DS50 goes dark and **lights while a drone is in the frame** —
+and SW19 again stops it, back to blinking. Each session's latency table goes to
+the journal: `journalctl -u drone-detect -f`.
+
+**`systemctl stop drone-detect` before running `live.py` or `run_on_board.py`
+by hand** — both want the accelerator and the camera.
 
 ### If it goes wrong
 

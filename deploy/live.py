@@ -4,6 +4,7 @@
     python3 live.py -n 600          # 600 frames, then print the latency table
     python3 live.py --depth 1       # one frame at a time, as before 2026-09-26
     python3 live.py --led           # DS50 lit while the frame holds a detection
+    python3 live.py --button        # SW19 starts / stops detection (drone-detect.service)
 
 Prints one status line a second (the console is a 115200-baud UART, so no
 per-frame output) and, at the end, per-stage latency. `age` is measured from the
@@ -22,6 +23,9 @@ age (+12 ms), because the extra frame waits for the CPU.
 """
 import argparse
 import os
+import select
+import signal
+import struct
 import sys
 import time
 
@@ -32,6 +36,34 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # DS50, green, next to SW19: the ZCU102's only PS-side user LED (MIO23). The
 # device tree gives it to Linux as a heartbeat; --led takes it over for the run.
 LED = "/sys/class/leds/heartbeat"
+# SW19, next to DS50: the PS-side pushbutton (MIO22), a gpio-keys input device.
+BUTTON = "/dev/input/by-path/platform-gpio-keys-event"
+
+
+class Button:
+    """SW19 presses from the kernel's input events (24 bytes each on 64-bit:
+    timeval, type, code, value). A press is EV_KEY with value 1; releases and
+    autorepeat are ignored."""
+
+    def __init__(self, path=BUTTON):
+        self.fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+
+    def pressed(self, timeout=0.0):
+        """True if SW19 went down since the last call (waits up to `timeout` s,
+        None = forever). Drains every pending event."""
+        down = False
+        while select.select([self.fd], [], [], timeout)[0]:
+            data = os.read(self.fd, 24 * 64)
+            for i in range(0, len(data) - 23, 24):
+                typ, _, value = struct.unpack_from("<HHi", data, i + 16)
+                down |= typ == 1 and value == 1
+            if down:
+                return True
+        return down
+
+    def wait(self):
+        while not self.pressed(None):
+            pass
 
 
 def main():
@@ -44,6 +76,9 @@ def main():
     p.add_argument("--depth", type=int, default=3, help="frames in the accelerator at once")
     p.add_argument("--led", action="store_true",
                    help="light DS50 while the latest frame has a box above --conf")
+    p.add_argument("--button", action="store_true",
+                   help="load everything, then let SW19 start and stop detection; "
+                        "DS50 blinks while idle and shows detections while running")
     p.add_argument("--slow-ms", type=float, default=60,
                    help="log every frame whose age at aim exceeds this, with its stages")
     p.add_argument("--gc", choices=["freeze", "on", "off"], default="freeze",
@@ -79,93 +114,121 @@ def main():
         if args.gc == "off":
             gc.disable()
     w, h = map(int, args.mode.split("x"))
-    cam = Camera(args.dev, w, h, args.fps)
-    trk = AimTracker((OUT_W, OUT_H))
     now = lambda: time.clock_gettime(time.CLOCK_MONOTONIC)
-
-    # one row per frame, written when its aim comes out: age at read splits into
-    # driver stamp -> DQBUF (transfer + thread wake-up), DQBUF -> ready (crop +
-    # RGB in the capture thread) and ready -> read (waiting for the main loop)
-    names = ["stamp->DQBUF", "DQBUF->ready", "ready->read", "age at read", "submit",
-             "in PL", "decode", "track", "age at aim", "aim gap"]
     decode = lambda buf: decode_packed(buf, scale, bias, args.conf)
-    T = {k: [] for k in names}
-    led, lit = None, False
-    if args.led:
-        with open(LED + "/trigger", "w") as f:
-            f.write("none")
-        led = open(LED + "/brightness", "w")
-        led.write("0"); led.flush()
-    t_prev, t_print, k, t_aim, slow = None, now(), 0, None, []
-    print(f"camera {args.mode} @{cam.fps:.0f}, window {OUT_W}x{OUT_H}, depth {args.depth}; "
-          "Ctrl-C to stop", flush=True)
+    # systemd stops a service with SIGTERM: end the session the same way as Ctrl-C
+    def _term(*_):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, _term)
+
+    def session(button):
+        """Camera on, detect until -n frames, Ctrl-C or (button mode) SW19, camera
+        off, print the latency table. Returns False if the program should end."""
+        cam = Camera(args.dev, w, h, args.fps)
+        trk = AimTracker((OUT_W, OUT_H))
+        # one row per frame, written when its aim comes out: age at read splits into
+        # driver stamp -> DQBUF (transfer + thread wake-up), DQBUF -> ready (crop +
+        # RGB in the capture thread) and ready -> read (waiting for the main loop)
+        names = ["stamp->DQBUF", "DQBUF->ready", "ready->read", "age at read", "submit",
+                 "in PL", "decode", "track", "age at aim", "aim gap"]
+        T = {k: [] for k in names}
+        led, lit = None, False
+        if args.led or button:
+            with open(LED + "/trigger", "w") as f:
+                f.write("none")
+            led = open(LED + "/brightness", "w")
+            led.write("0"); led.flush()
+        t_prev, t_print, k, t_aim, slow = None, now(), 0, None, []
+        print(f"camera {args.mode} @{cam.fps:.0f}, window {OUT_W}x{OUT_H}, depth {args.depth}; "
+              + ("SW19 to stop" if button else "Ctrl-C to stop"), flush=True)
+        go_on = True
+        try:
+            t_start = now()
+            while not args.n or k < args.n:
+                if button and button.pressed():
+                    break
+                # keep the accelerator fed: the newest frame into every slot it can take
+                while pipe.can_submit():
+                    x, t_frame = cam.read()
+                    t1 = now()
+                    tag = [t_frame, t1, *cam.last]
+                    pipe.submit(x, tag)
+                    tag.append(now() - t1)                    # submit time
+                t2 = now()
+                r = pipe.poll(read=decode)                    # decoded in the DMA buffer itself
+                if r is None:
+                    time.sleep(0.0002)                        # let the capture thread run
+                    continue
+                t4 = now()
+                (t_frame, t1, t_dq, t_pub, t_submit), (boxes, scores) = r
+                aim = trk.update(boxes, scores, 0.0 if t_prev is None else t_frame - t_prev)
+                t5 = now()
+                t_prev = t_frame
+                if led and lit != (len(scores) > 0):
+                    lit = not lit
+                    led.write("1" if lit else "0"); led.flush()
+                row = (t_dq - t_frame, t_pub - t_dq, t1 - t_pub, t1 - t_frame, t_submit,
+                       t2 - t1, t4 - t2, t5 - t4, t5 - t_frame,
+                       float("nan") if t_aim is None else t5 - t_aim)
+                t_aim = t5
+                for n, v in zip(names, row):
+                    T[n].append(v)
+                if row[8] * 1e3 > args.slow_ms and len(slow) < 200:
+                    slow.append((t5 - t_start, row))
+                k += 1
+                if t5 - t_print >= 1.0:
+                    a = np.array(T["age at aim"][-200:]) * 1e3
+                    state = (f"aim dx {aim.offset[0]:+6.1f} dy {aim.offset[1]:+6.1f} px"
+                             f"{'  CENTRED' if aim.close_enough else ''}" if aim.offset is not None
+                             else "tracking, no aim yet" if aim.tracking else "no track")
+                    print(f"{k:6d}  {len(scores):2d} boxes  {state:34s}  age {np.median(a):5.1f} ms"
+                          f"  skipped {cam.skipped}", flush=True)
+                    t_print = t5
+        except KeyboardInterrupt:
+            go_on = False
+        finally:
+            cam.close()
+            while pipe.in_flight():               # frames still in the PL belong to this session
+                pipe.poll(read=lambda buf: None)
+            if led:
+                led.close()
+                with open(LED + "/trigger", "w") as f:
+                    f.write("heartbeat")
+
+        fps = k / (now() - t_start) if k else 0.0
+        with open("/proc/self/status") as f:
+            rss = next(l.split()[1] for l in f if l.startswith("VmRSS"))
+        print(f"\nresident memory: {int(rss) / 1024:.0f} MB")
+        print(f"\n{k} frames at {fps:.1f} FPS, {cam.skipped} skipped by the camera thread")
+        if k <= 30:
+            return go_on
+        print(f"{'stage':13s} {'median':>8s} {'p95':>8s} {'p99':>8s} {'p99.9':>8s} {'max':>8s}   ms")
+        for n in names:
+            a = 1e3 * np.array(T[n][30:])                 # drop start-up
+            a = a[~np.isnan(a)]
+            q = np.percentile(a, [50, 95, 99, 99.9])
+            print(f"{n:13s} " + " ".join(f"{v:8.2f}" for v in q) + f" {a.max():8.2f}")
+        print(f"\n{len(slow)} frames with age at aim over {args.slow_ms:g} ms"
+              + (" (first 200 kept)" if len(slow) == 200 else ""), flush=True)
+        if slow:
+            print("   t [s]  " + " ".join(f"{n[:11]:>11s}" for n in names))
+            for t, row in slow[:25]:
+                print(f"{t:8.1f}  " + " ".join(f"{1e3 * v:11.2f}" for v in row))
+        return go_on
+
+    if not args.button:
+        session(None)
+        return
+    button = Button()
+    print("ready: SW19 starts and stops detection (DS50 blinks while idle)", flush=True)
     try:
-        t_start = now()
-        while not args.n or k < args.n:
-            # keep the accelerator fed: the newest frame into every slot it can take
-            while pipe.can_submit():
-                x, t_frame = cam.read()
-                t1 = now()
-                tag = [t_frame, t1, *cam.last]
-                pipe.submit(x, tag)
-                tag.append(now() - t1)                    # submit time
-            t2 = now()
-            r = pipe.poll(read=decode)                    # decoded in the DMA buffer itself
-            if r is None:
-                time.sleep(0.0002)                        # let the capture thread run
-                continue
-            t4 = now()
-            (t_frame, t1, t_dq, t_pub, t_submit), (boxes, scores) = r
-            aim = trk.update(boxes, scores, 0.0 if t_prev is None else t_frame - t_prev)
-            t5 = now()
-            t_prev = t_frame
-            if led and lit != (len(scores) > 0):
-                lit = not lit
-                led.write("1" if lit else "0"); led.flush()
-            row = (t_dq - t_frame, t_pub - t_dq, t1 - t_pub, t1 - t_frame, t_submit,
-                   t2 - t1, t4 - t2, t5 - t4, t5 - t_frame,
-                   float("nan") if t_aim is None else t5 - t_aim)
-            t_aim = t5
-            for n, v in zip(names, row):
-                T[n].append(v)
-            if row[8] * 1e3 > args.slow_ms and len(slow) < 200:
-                slow.append((t5 - t_start, row))
-            k += 1
-            if t5 - t_print >= 1.0:
-                a = np.array(T["age at aim"][-200:]) * 1e3
-                state = (f"aim dx {aim.offset[0]:+6.1f} dy {aim.offset[1]:+6.1f} px"
-                         f"{'  CENTRED' if aim.close_enough else ''}" if aim.offset is not None
-                         else "tracking, no aim yet" if aim.tracking else "no track")
-                print(f"{k:6d}  {len(scores):2d} boxes  {state:34s}  age {np.median(a):5.1f} ms"
-                      f"  skipped {cam.skipped}", flush=True)
-                t_print = t5
+        while True:
+            button.wait()
+            if not session(button):
+                break
+            print("stopped; SW19 to start again", flush=True)
     except KeyboardInterrupt:
         pass
-    finally:
-        cam.close()
-        if led:
-            led.close()
-            with open(LED + "/trigger", "w") as f:
-                f.write("heartbeat")
-
-    fps = k / (now() - t_start) if k else 0.0
-    with open("/proc/self/status") as f:
-        rss = next(l.split()[1] for l in f if l.startswith("VmRSS"))
-    print(f"\nresident memory at exit: {int(rss) / 1024:.0f} MB")
-    print(f"\n{k} frames at {fps:.1f} FPS, {cam.skipped} skipped by the camera thread")
-    print(f"{'stage':13s} {'median':>8s} {'p95':>8s} {'p99':>8s} {'p99.9':>8s} {'max':>8s}   ms")
-    for n in names:
-        a = 1e3 * np.array(T[n][30:] or T[n])            # drop start-up
-        a = a[~np.isnan(a)]
-        q = np.percentile(a, [50, 95, 99, 99.9])
-        print(f"{n:13s} " + " ".join(f"{v:8.2f}" for v in q) + f" {a.max():8.2f}")
-    print(f"\n{len(slow)} frames with age at aim over {args.slow_ms:g} ms"
-          + (" (first 200 kept)" if len(slow) == 200 else ""))
-    if slow:
-        print("   t [s]  " + " ".join(f"{n[:11]:>11s}" for n in names))
-        for t, row in slow[:25]:
-            print(f"{t:8.1f}  " + " ".join(f"{1e3 * v:11.2f}" for v in row))
-
 
 if __name__ == "__main__":
     main()
