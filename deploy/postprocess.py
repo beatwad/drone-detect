@@ -36,6 +36,9 @@ VALIDATION (2026-08-14)
   difference — it changes which of two overlapping boxes represents an object,
   never whether the object is found.
 """
+import ctypes
+import os
+
 import numpy as np
 
 REG_MAX = 16          # DFL bins per box side
@@ -101,17 +104,73 @@ def decode_confident(raw_nhwc, scale, bias, conf_thr, stride=STRIDE, reg_max=REG
     _, h, w, c = raw_nhwc.shape
     assert c == 4 * reg_max + nc, f'expected {4 * reg_max + nc} channels, got {c}'
     x = np.asarray(raw_nhwc, dtype=np.float32).reshape(h * w, c)
+    return _decode_rows(x, np.arange(h * w), h, w, scale, bias, conf_thr, stride, reg_max)
+
+
+def _decode_rows(x, cells, h, w, scale, bias, conf_thr, stride, reg_max):
+    """decode_confident's arithmetic on a subset of cells: x (N, C) float32 rows
+    of raw integers, `cells` their indices. Element-wise, so any superset of the
+    passing cells gives bit-identical results."""
     k = 4 * reg_max                                          # first class channel
     cls = x[:, k] * scale[k] + bias[k]
     conf = 1.0 / (1.0 + np.exp(-cls))
-    idx = np.nonzero(conf >= conf_thr)[0]
+    keep = np.nonzero(conf >= conf_thr)[0]
+    idx = cells[keep]
 
-    box = x[idx, :k] * scale[:k] + bias[:k]                  # (N, 64)
+    box = x[keep, :k] * scale[:k] + bias[:k]                 # (N, 64)
     box = _softmax(box.reshape(-1, 4, reg_max), axis=2)
     box = (box * np.arange(reg_max, dtype=np.float32)).sum(2)  # (N, 4) l, t, r, b
     anchors = make_anchors(h, w, stride)[0][0].T[idx]        # (N, 2)
     xyxy = np.concatenate((anchors - box[:, :2], anchors + box[:, 2:]), 1) * stride
-    return xyxy, conf[idx]
+    return xyxy, conf[keep]
+
+
+# deploy/unpack.c's scan_cells, cross-compiled for the A53; NumPy fallback without.
+try:
+    _scan = ctypes.CDLL(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                     "libunpack.so")).scan_cells
+    _scan.argtypes = [ctypes.c_void_p, ctypes.c_long] + [ctypes.c_int] * 4 + \
+                     [ctypes.c_float] * 3 + [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long]
+    _scan.restype = ctypes.c_long
+except OSError:
+    _scan = None
+
+
+def decode_packed(packed, scale, bias, conf_thr, h=24, w=40, bits=21, stride=STRIDE,
+                  reg_max=REG_MAX, nc=NC):
+    """The accelerator's raw output buffer -> the same (xyxy, confidence) as
+    unpacking it and calling decode_confident, bit for bit.
+
+    `packed` is the output DMA buffer, (..., C, nbytes) uint8: one signed
+    `bits`-bit element per little-endian word. With libunpack.so, scan_cells
+    reads the class channel of every cell straight out of it and unpacks only
+    the cells within reach of the threshold (~10 of 960) -- no copy of the
+    buffer, no unpack of the other 62,000 values. The exact threshold is then
+    re-applied here, so the looser C test only ever admits extra rows.
+    """
+    c = 4 * reg_max + nc
+    nbytes = packed.shape[-1]
+    cells = h * w
+    assert packed.size == cells * c * nbytes, "unexpected output buffer shape"
+    if _scan is not None:
+        packed = np.ascontiguousarray(packed)                # a DMA buffer already is: no copy
+        k = 4 * reg_max
+        lo = np.log(conf_thr / (1 - conf_thr)) - 1e-3 if 0 < conf_thr < 1 else -np.inf
+        idx = np.empty(cells, np.int32)
+        vals = np.empty((cells, c), np.float32)
+        n = _scan(packed.ctypes.data, cells, c, nbytes, bits, k,
+                  float(scale[k]), float(bias[k]), float(lo),
+                  idx.ctypes.data, vals.ctypes.data, cells)
+        return _decode_rows(vals[:n], idx[:n].astype(np.int64), h, w, scale, bias,
+                            conf_thr, stride, reg_max)
+    b = packed.reshape(-1, nbytes).astype(np.int64)
+    v = np.zeros(len(b), np.int64)
+    for i in range(nbytes):
+        v |= b[:, i] << (8 * i)
+    v &= (1 << bits) - 1
+    v = (v ^ (1 << (bits - 1))) - (1 << (bits - 1))
+    x = v.astype(np.float32).reshape(cells, c)
+    return _decode_rows(x, np.arange(cells), h, w, scale, bias, conf_thr, stride, reg_max)
 
 
 def nms(boxes, scores, iou_thr=0.45):

@@ -56,7 +56,7 @@ def main():
     from driver_base import FINNExampleOverlay
     from capture import Camera, OUT_H, OUT_W
     from pipeline import AccelPipeline
-    from postprocess import decode_confident
+    from postprocess import decode_packed
     from run_on_board import io_shape_dict
     from track import AimTracker
 
@@ -72,8 +72,8 @@ def main():
     trk = AimTracker((OUT_W, OUT_H))
     now = lambda: time.clock_gettime(time.CLOCK_MONOTONIC)
 
-    names = ["age at read", "wait frame", "submit", "in PL", "unpack", "decode", "track",
-             "age at aim"]
+    names = ["age at read", "wait frame", "submit", "in PL", "decode", "track", "age at aim"]
+    decode = lambda buf: decode_packed(buf, scale, bias, args.conf)
     T = {k: [] for k in names}
     led, lit = None, False
     if args.led:
@@ -97,21 +97,19 @@ def main():
                 T["wait frame"].append(t1 - t0)
                 T["submit"].append(now() - t1)
             t2 = now()
-            r = pipe.poll()
+            r = pipe.poll(read=decode)                    # decoded in the DMA buffer itself
             if r is None:
                 time.sleep(0.0002)                        # let the capture thread run
                 continue
-            t3 = now()
-            (t_frame, t_sub), y = r
-            boxes, scores = decode_confident(y, scale, bias, args.conf)
             t4 = now()
+            (t_frame, t_sub), (boxes, scores) = r
             aim = trk.update(boxes, scores, 0.0 if t_prev is None else t_frame - t_prev)
             t5 = now()
             t_prev = t_frame
             if led and lit != (len(scores) > 0):
                 lit = not lit
                 led.write("1" if lit else "0"); led.flush()
-            for n, v in zip(names[3:], (t2 - t_sub, t3 - t2, t4 - t3, t5 - t4, t5 - t_frame)):
+            for n, v in zip(names[3:], (t2 - t_sub, t4 - t2, t5 - t4, t5 - t_frame)):
                 T[n].append(v)
             k += 1
             if t5 - t_print >= 1.0:

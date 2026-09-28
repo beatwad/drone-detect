@@ -76,15 +76,21 @@ class AccelPipeline:
         self.fly.append((s, tag))
         _start(self.idma, self.ibuf[s])
 
-    def poll(self):
+    def poll(self, read=None):
         """(tag, y) for the oldest frame if it is done, else None. y is the raw
-        INT21 NHWC output, exactly what execute() returns."""
+        INT21 NHWC output, exactly what execute() returns -- or, if `read` is
+        given, read(buffer) called on the packed output buffer itself before its
+        slot is reused (e.g. postprocess.decode_packed: no copy, no full unpack)."""
         if not self.fly or not _idle(self.odma):
             return None
         s, tag = self.fly.popleft()
         if self.fly:                           # next frame's output may already be queued
             _start(self.odma, self.obuf[self.fly[0][0]])
         self.obuf[s].invalidate()
+        if read is not None:
+            y = read(self.obuf[s])
+            self.free.append(s)
+            return tag, y
         np.copyto(self.out, self.obuf[s])
         self.free.append(s)
         y = self.acc.unfold_output(self.acc.unpack_output(self.out))

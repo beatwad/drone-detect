@@ -2358,6 +2358,27 @@ GIL over only every 5 ms by default. 600 frames each, depth 3, C unpack:
 - Still unexplained: ~2 ms of age at read — presumably the capture thread's own
   Python per frame (select, DQBUF, QBUF, notify). Not yet measured.
 
+**Decode straight out of the DMA buffer.** `unpack.c`'s new `scan_cells` reads
+only the class channel of all 960 cells from the output buffer, tests the logit
+against a threshold 1e-3 below `logit(conf_thr)`, and unpacks just the cells
+that pass; `postprocess.decode_packed` then re-applies `decode_confident`'s exact
+arithmetic to those ~10 rows (`_decode_rows`, element-wise, so bit-identical).
+No 187 KB copy, no unpack of the other 62,000 values, and the C side needs no
+libm. `pipeline.poll(read=...)` runs it on the buffer before its slot is
+reused. Checked: host, 60 golden frames × 5 thresholds, C and NumPy paths, both
+buffer layouts — identical; board, 60 real accelerator outputs — identical to
+unpack + `decode_confident`, 1.50 vs 3.47 ms. (A non-contiguous test buffer
+first read garbage through the raw pointer; `decode_packed` now makes it
+contiguous, a no-op for a DMA buffer.) Live, 600 frames:
+
+| | unpack + decode_confident | decode_packed |
+|---|---|---|
+| unpack + decode | 2.57 + 1.60 ms | **2.03 ms** (incl. idle check, invalidate) |
+| **age at aim**, median / p95 / max | 37.74 / 40.72 / 46.44 | **35.81 / 38.30 / 42.48** |
+| loop rate | 103.4 FPS | **113.0 FPS** |
+
+Across this section: **39.5 → 35.8 ms** median age at aim, **97 → 113 FPS**.
+
 ## 13. False alarms: birds and planes are drones to the network — 2026-09-26
 
 `scripts/false_alarm.py`, the shipping checkpoint `runs/qat/v8n_p3_w4a4` (the
