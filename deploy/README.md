@@ -19,7 +19,8 @@ lands on the card.
 | `track.py` | seed → IoU cluster → WBF → Kalman → centring gate. Never run on a real detection |
 | `capture.py` | camera → centre 320×192 RGB window: V4L2 via ioctl + mmap, 1280×720 YUYV, newest frame only |
 | `yuyv.c`, `libyuyv.so` | the window's YUYV → RGB in C, cross-compiled for the A53 (build line in the `.c`); `capture.py` falls back to NumPy without it |
-| `live.py` | the whole chain: camera → accelerator → `decode_confident` → tracker, one status line a second |
+| `unpack.c`, `libunpack.so` | INT21 output unpack in C for `finn/util/data_packing.py`'s fast path (build line in the `.c`); NumPy fallback without it |
+| `live.py` | the whole chain: camera → accelerator → `decode_confident` → tracker, one status line a second; `--led` lights DS50 (green, by SW19) while a frame holds a detection |
 | `pipeline.py` | up to K frames in the accelerator at once, results in order; used by `live.py` and `run_on_board.py` (`--depth`, default 3) |
 | `pynq_offline/` | a pure-Python PYNQ 3.0.1 and its aarch64 wheels, so the board needs neither network nor compiler. See its README |
 | `boot/` | `BOOT.BIN`, `image.ub`, `boot.scr` for the FAT32 partition, `rootfs.tar.gz` for the ext4 one, and the `.xsa` the image was built from |

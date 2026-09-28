@@ -3,6 +3,7 @@
     python3 live.py                 # run until Ctrl-C
     python3 live.py -n 600          # 600 frames, then print the latency table
     python3 live.py --depth 1       # one frame at a time, as before 2026-09-26
+    python3 live.py --led           # DS50 lit while the frame holds a detection
 
 Prints one status line a second (the console is a 115200-baud UART, so no
 per-frame output) and, at the end, per-stage latency. `age` is measured from the
@@ -27,6 +28,10 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
+# DS50, green, next to SW19: the ZCU102's only PS-side user LED (MIO23). The
+# device tree gives it to Linux as a heartbeat; --led takes it over for the run.
+LED = "/sys/class/leds/heartbeat"
+
 
 def main():
     p = argparse.ArgumentParser()
@@ -36,6 +41,8 @@ def main():
     p.add_argument("-n", type=int, default=0, help="frames to run (0 = until Ctrl-C)")
     p.add_argument("--conf", type=float, default=0.25)
     p.add_argument("--depth", type=int, default=3, help="frames in the accelerator at once")
+    p.add_argument("--led", action="store_true",
+                   help="light DS50 while the latest frame has a box above --conf")
     args = p.parse_args()
 
     os.environ.setdefault("XILINX_XRT", "/usr")          # see run_on_board.py
@@ -60,8 +67,15 @@ def main():
     trk = AimTracker((OUT_W, OUT_H))
     now = lambda: time.clock_gettime(time.CLOCK_MONOTONIC)
 
-    names = ["wait frame", "submit", "in PL", "unpack", "decode", "track", "age at aim"]
+    names = ["age at read", "wait frame", "submit", "in PL", "unpack", "decode", "track",
+             "age at aim"]
     T = {k: [] for k in names}
+    led, lit = None, False
+    if args.led:
+        with open(LED + "/trigger", "w") as f:
+            f.write("none")
+        led = open(LED + "/brightness", "w")
+        led.write("0"); led.flush()
     t_prev, t_print, k = None, now(), 0
     print(f"camera {args.mode} @{cam.fps:.0f}, window {OUT_W}x{OUT_H}, depth {args.depth}; "
           "Ctrl-C to stop", flush=True)
@@ -74,6 +88,7 @@ def main():
                 x, t_frame = cam.read()
                 t1 = now()
                 pipe.submit(x, (t_frame, t1))
+                T["age at read"].append(t1 - t_frame)        # driver stamp -> RGB in hand
                 T["wait frame"].append(t1 - t0)
                 T["submit"].append(now() - t1)
             t2 = now()
@@ -88,7 +103,10 @@ def main():
             aim = trk.update(boxes, scores, 0.0 if t_prev is None else t_frame - t_prev)
             t5 = now()
             t_prev = t_frame
-            for n, v in zip(names[2:], (t2 - t_sub, t3 - t2, t4 - t3, t5 - t4, t5 - t_frame)):
+            if led and lit != (len(scores) > 0):
+                lit = not lit
+                led.write("1" if lit else "0"); led.flush()
+            for n, v in zip(names[3:], (t2 - t_sub, t3 - t2, t4 - t3, t5 - t4, t5 - t_frame)):
                 T[n].append(v)
             k += 1
             if t5 - t_print >= 1.0:
@@ -103,6 +121,10 @@ def main():
         pass
     finally:
         cam.close()
+        if led:
+            led.close()
+            with open(LED + "/trigger", "w") as f:
+                f.write("heartbeat")
 
     fps = k / (now() - t_start) if k else 0.0
     print(f"\n{k} frames at {fps:.1f} FPS, {cam.skipped} skipped by the camera thread")
