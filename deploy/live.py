@@ -44,6 +44,12 @@ def main():
     p.add_argument("--depth", type=int, default=3, help="frames in the accelerator at once")
     p.add_argument("--led", action="store_true",
                    help="light DS50 while the latest frame has a box above --conf")
+    p.add_argument("--slow-ms", type=float, default=60,
+                   help="log every frame whose age at aim exceeds this, with its stages")
+    p.add_argument("--gc", choices=["freeze", "on", "off"], default="freeze",
+                   help="freeze (default): move everything built at start-up out of the "
+                        "collector's reach, so a full collection costs ms, not ~200 ms "
+                        "(build_notes §12.12); off: disable it too; on: Python's default")
     p.add_argument("--gil-switch", type=float, default=0.2,
                    help="ms a thread may hold the GIL while another waits (Python's "
                         "default is 5): the capture thread waits on the polling main loop")
@@ -67,12 +73,21 @@ def main():
                              batch_size=1, runtime_weight_dir=os.path.join(HERE, "runtime_weights/"),
                              device=Device.devices[0])
     pipe = AccelPipeline(acc, depth=args.depth)
+    if args.gc != "on":                   # before the camera starts: this pause costs ~200 ms
+        import gc
+        gc.collect(); gc.freeze()
+        if args.gc == "off":
+            gc.disable()
     w, h = map(int, args.mode.split("x"))
     cam = Camera(args.dev, w, h, args.fps)
     trk = AimTracker((OUT_W, OUT_H))
     now = lambda: time.clock_gettime(time.CLOCK_MONOTONIC)
 
-    names = ["age at read", "wait frame", "submit", "in PL", "decode", "track", "age at aim"]
+    # one row per frame, written when its aim comes out: age at read splits into
+    # driver stamp -> DQBUF (transfer + thread wake-up), DQBUF -> ready (crop +
+    # RGB in the capture thread) and ready -> read (waiting for the main loop)
+    names = ["stamp->DQBUF", "DQBUF->ready", "ready->read", "age at read", "submit",
+             "in PL", "decode", "track", "age at aim", "aim gap"]
     decode = lambda buf: decode_packed(buf, scale, bias, args.conf)
     T = {k: [] for k in names}
     led, lit = None, False
@@ -81,7 +96,7 @@ def main():
             f.write("none")
         led = open(LED + "/brightness", "w")
         led.write("0"); led.flush()
-    t_prev, t_print, k = None, now(), 0
+    t_prev, t_print, k, t_aim, slow = None, now(), 0, None, []
     print(f"camera {args.mode} @{cam.fps:.0f}, window {OUT_W}x{OUT_H}, depth {args.depth}; "
           "Ctrl-C to stop", flush=True)
     try:
@@ -89,28 +104,32 @@ def main():
         while not args.n or k < args.n:
             # keep the accelerator fed: the newest frame into every slot it can take
             while pipe.can_submit():
-                t0 = now()
                 x, t_frame = cam.read()
                 t1 = now()
-                pipe.submit(x, (t_frame, t1))
-                T["age at read"].append(t1 - t_frame)        # driver stamp -> RGB in hand
-                T["wait frame"].append(t1 - t0)
-                T["submit"].append(now() - t1)
+                tag = [t_frame, t1, *cam.last]
+                pipe.submit(x, tag)
+                tag.append(now() - t1)                    # submit time
             t2 = now()
             r = pipe.poll(read=decode)                    # decoded in the DMA buffer itself
             if r is None:
                 time.sleep(0.0002)                        # let the capture thread run
                 continue
             t4 = now()
-            (t_frame, t_sub), (boxes, scores) = r
+            (t_frame, t1, t_dq, t_pub, t_submit), (boxes, scores) = r
             aim = trk.update(boxes, scores, 0.0 if t_prev is None else t_frame - t_prev)
             t5 = now()
             t_prev = t_frame
             if led and lit != (len(scores) > 0):
                 lit = not lit
                 led.write("1" if lit else "0"); led.flush()
-            for n, v in zip(names[3:], (t2 - t_sub, t4 - t2, t5 - t4, t5 - t_frame)):
+            row = (t_dq - t_frame, t_pub - t_dq, t1 - t_pub, t1 - t_frame, t_submit,
+                   t2 - t1, t4 - t2, t5 - t4, t5 - t_frame,
+                   float("nan") if t_aim is None else t5 - t_aim)
+            t_aim = t5
+            for n, v in zip(names, row):
                 T[n].append(v)
+            if row[8] * 1e3 > args.slow_ms and len(slow) < 200:
+                slow.append((t5 - t_start, row))
             k += 1
             if t5 - t_print >= 1.0:
                 a = np.array(T["age at aim"][-200:]) * 1e3
@@ -130,11 +149,22 @@ def main():
                 f.write("heartbeat")
 
     fps = k / (now() - t_start) if k else 0.0
+    with open("/proc/self/status") as f:
+        rss = next(l.split()[1] for l in f if l.startswith("VmRSS"))
+    print(f"\nresident memory at exit: {int(rss) / 1024:.0f} MB")
     print(f"\n{k} frames at {fps:.1f} FPS, {cam.skipped} skipped by the camera thread")
-    print(f"{'stage':12s} {'median':>8s} {'p95':>8s} {'max':>8s}   ms")
+    print(f"{'stage':13s} {'median':>8s} {'p95':>8s} {'p99':>8s} {'p99.9':>8s} {'max':>8s}   ms")
     for n in names:
         a = 1e3 * np.array(T[n][30:] or T[n])            # drop start-up
-        print(f"{n:12s} {np.median(a):8.2f} {np.percentile(a, 95):8.2f} {a.max():8.2f}")
+        a = a[~np.isnan(a)]
+        q = np.percentile(a, [50, 95, 99, 99.9])
+        print(f"{n:13s} " + " ".join(f"{v:8.2f}" for v in q) + f" {a.max():8.2f}")
+    print(f"\n{len(slow)} frames with age at aim over {args.slow_ms:g} ms"
+          + (" (first 200 kept)" if len(slow) == 200 else ""))
+    if slow:
+        print("   t [s]  " + " ".join(f"{n[:11]:>11s}" for n in names))
+        for t, row in slow[:25]:
+            print(f"{t:8.1f}  " + " ".join(f"{1e3 * v:11.2f}" for v in row))
 
 
 if __name__ == "__main__":

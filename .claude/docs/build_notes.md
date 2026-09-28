@@ -2379,6 +2379,42 @@ contiguous, a no-op for a DMA buffer.) Live, 600 frames:
 
 Across this section: **39.5 → 35.8 ms** median age at aim, **97 → 113 FPS**.
 
+### 12.12 The 240 ms stalls were Python's garbage collector — 2026-09-28
+
+`live.py` now writes one row per frame when its aim comes out, splits age at
+read into three parts, reports p99 / p99.9 and the **aim gap** (time between
+consecutive aims — what the aiming loop actually suffers), and logs every frame
+over `--slow-ms` (60) with its stages and time into the run.
+
+**Age at read, split** (3000 frames): stamp → DQBUF **5.39**, DQBUF → ready
+(crop + RGB in the thread) **1.54**, ready → read **2.91** ms. The thread wakes
+on time — 5.39 is §12.9's standalone transfer time — so the "missing ~2 ms" of
+§12.11 is ready → read: a frame is picked up only when an accelerator slot
+frees, not when it is ready. Half an interval (~2.4 ms) is inherent to
+newest-frame-only; ~0.5 ms is not. The thread does wake late in the tail:
+stamp → DQBUF p99 9.8 ms.
+
+**The stall**, 10 min / 70,000 frames with GC as is: one, at 150.8 s, ~240 ms,
+seen at once in every frame in flight — decode 243 ms for one, "in PL" 262 for
+the next (nobody polled), ready → read 246, and stamp → DQBUF 238–244 for two
+more, i.e. the **capture thread stood still too**. The whole process paused;
+the kernel log is silent for the whole run.
+
+| 10 min, 70,000 frames | GC as is | `gc.disable()` | **`gc.freeze()`** |
+|---|---|---|---|
+| frames over 60 ms during the run | 1 stall (6 frames) | 0 | **0** |
+| age at aim p99.9 / max | 42.3 / 278.4 ms | 43.3 / 46.9 | **44.9 / 46.8** |
+| aim gap p99.9 / max | 15.7 / 247.5 ms | 17.1 / 26.1 | **18.4 / 20.0** |
+
+The disabled run gave the cause away: its one-off `gc.collect()` before the loop
+took **~190 ms**, and the first frames aged by exactly that — the same size as
+the stall. A full collection walks everything PYNQ, pydantic and numpy built at
+start-up. `gc.freeze()` moves all of it into the permanent generation, so the
+collector keeps running (no leak from cycles; 139 MB resident after 70,000
+frames) but only ever walks new objects. `live.py --gc freeze` is now the
+default, done before the camera starts so the one pause hits no frame;
+`--gc on|off` for comparison. RT priority (`chrt`) was not needed for this.
+
 ## 13. False alarms: birds and planes are drones to the network — 2026-09-26
 
 `scripts/false_alarm.py`, the shipping checkpoint `runs/qat/v8n_p3_w4a4` (the

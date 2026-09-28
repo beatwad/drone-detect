@@ -159,7 +159,8 @@ class Camera:
             fcntl.ioctl(self.fd, VIDIOC_QBUF, b)
 
         self._lock = threading.Condition()
-        self._latest = None           # (raw window, timestamp, driver sequence)
+        self._latest = None           # (window, timestamp, driver sequence, t_dq, t_pub)
+        self.last = None              # (t_dq, t_pub) of the frame read() returned last
         self._seen = -1
         self.skipped = 0
         self._run = True
@@ -190,6 +191,7 @@ class Camera:
                 continue
             b = self._buf(0)
             fcntl.ioctl(self.fd, VIDIOC_DQBUF, b)
+            t_dq = time.clock_gettime(time.CLOCK_MONOTONIC)
             i = struct.unpack_from("<I", b, 0)[0]
             sec, usec = struct.unpack_from("<2q", b, 24)
             seq = struct.unpack_from("<I", b, 56)[0]
@@ -200,18 +202,21 @@ class Camera:
             else:
                 out = frames[i].reshape(self.h, self.stride)[rows, cols].copy()
             fcntl.ioctl(self.fd, VIDIOC_QBUF, b)
+            t_pub = time.clock_gettime(time.CLOCK_MONOTONIC)
             with self._lock:
-                self._latest = (out, sec + usec * 1e-6, seq)
+                self._latest = (out, sec + usec * 1e-6, seq, t_dq, t_pub)
                 self._lock.notify_all()
         del frames, ptrs                          # release the mmaps for close()
 
     def read(self, timeout=5.0):              # the first frame can take ~2 s
-        """Newest unseen frame -> ((1, 192, 320, 3) RGB uint8, CLOCK_MONOTONIC stamp)."""
+        """Newest unseen frame -> ((1, 192, 320, 3) RGB uint8, CLOCK_MONOTONIC stamp).
+        `self.last` then holds when the thread dequeued it and when it published it."""
         with self._lock:
             if not self._lock.wait_for(lambda: self._latest and self._latest[2] != self._seen,
                                        timeout):
                 raise TimeoutError("no frame from the camera")
-            out, t, seq = self._latest
+            out, t, seq, t_dq, t_pub = self._latest
+        self.last = (t_dq, t_pub)
         if self._seen >= 0:
             self.skipped += seq - self._seen - 1
         self._seen = seq
