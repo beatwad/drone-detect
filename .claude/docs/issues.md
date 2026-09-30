@@ -195,6 +195,9 @@ architecture. **FINN under-estimates BRAM ×2.86** because
 `estimate_layer_resources` excludes FIFOs; the shipping build sits at 75.8% of
 the ZCU102's 912 tiles. Budget BRAM at ×2.9 the estimate — it, not LUT, is the
 go/no-go for a smaller part.
+**The shipping build does not fit a K26 as built** (2026-09-30): 720 BRAM36 =
+25.9 Mbit against the K26's 23.1 Mbit of BRAM + URAM combined (build_notes
+§10.16).
 
 **Solved when:** a part is chosen against a measured footprint, with the tracker
 and preprocessing in PL (§5, §6) included in the budget rather than assumed free.
@@ -213,3 +216,27 @@ equivalent rejection stage) holds close/mid recall and centre error while the
 drone-class false-alarm rate on `val_empty` falls well below today's, re-measured
 with `scripts/false_alarm.py` — and then checked on real footage through our
 lens (§1), which is the number that actually matters.
+
+## 12. Training never sees what the camera sends
+
+Found 2026-09-30. The shipping net was trained at `imgsz=320` **square**: each
+web photo is letterboxed whole to 320 on its long side, then mosaic (0.5) and
+Ultralytics' default scale/translate jitter. On the board it gets a **192×320
+native-resolution window** cut from the sensor — no resize, a fixed lens, a
+fixed pixel scale. The shape itself is harmless (the net is fully convolutional;
+centre error at 192×320 measured 0.0119, better than the 0.0139 at 320). What
+differs is the **distribution of drone size in pixels and of context**: training
+drones are whatever size the photographer's framing made them after a
+downscale; deployed drones are the size the lens and the distance make them.
+
+A plain "crop 192×320 out of the photo, no resize" does not fix this: web photos
+have no common pixel scale, so a crop of a 4000-px close-up can be smaller than
+the drone. The version that means something is a **scale-matched crop**: rescale
+each image so the drone's pixel size is drawn from the deployment distribution
+(lens FOV × 5–10 m × drone sizes), then cut 192×320 around it at a random
+offset, since the tracker needs off-centre drones too.
+
+**Blocked on:** §2 — the deployment size distribution depends on the lens.
+**Solved when:** the model is trained on scale-matched 192×320 crops and scored
+on the same, with close/mid recall and centre error no worse than today's, and
+ideally checked on real footage through our lens (§1).

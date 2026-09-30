@@ -1085,6 +1085,11 @@ fork — only the exported ONNX — so it has to be rebuilt from this table.
 theoretical → 14.04 Mbit at FINN ×2**. That is the **7–23 Mbit band**, i.e. a
 K26-class part — so the built network *does* port off the devkit. An earlier note
 calling YOLOv8n devkit-only was costing the full 3.2M-param net, not this one.
+**Corrected 2026-09-30:** the ×2 rule counts weights only. The built design
+measured 691 BRAM36 (§10.16) and 720 after the FIFO fix (§11.13) = 25.9 Mbit,
+×3.7 the theoretical footprint. That exceeds the K26's entire on-chip memory
+(144 BRAM36 = 5.1 Mbit + 64 URAM = 18 Mbit = 23.1 Mbit), so as built it does
+**not** port to a K26 — see §10.16.
 
 ### 10.9 "comact" = ONE common activation range, and it must be trained in
 Measured on the reference graph 2026-08-12. Every live `Mul`-by-constant in it is
@@ -1334,6 +1339,12 @@ Third confirmation of the locked "Power shape" decision: the PS dominates.
 
 **BRAM remains the go/no-go for a smaller part.** 691 tiles = 24.9 Mbit on-chip;
 this design does not fit a ZU3EG and needs a K26-class part at minimum.
+**Corrected 2026-09-30:** it does not fit a K26 either. The K26 has 144 BRAM36
+(5.1 Mbit) + 64 URAM (18 Mbit) = 23.1 Mbit in all, below 24.9 Mbit (25.9 after
+§11.13's FIFO fix) — and URAM's 4K×72 granularity means the usable share is
+lower still. LUT (~70%) and DSP (~27%) would fit. Getting onto a K26 needs
+some mix of `ram_style="ultra"`, smaller FIFOs via folding, and a smaller net;
+none of it measured yet.
 
 ### 10.17 Generating the PYNQ driver when `step_synthesize_bitfile` never returned
 `MakePYNQDriver` does not need the bitfile, but it does need **the model

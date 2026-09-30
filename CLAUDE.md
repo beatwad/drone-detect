@@ -273,6 +273,13 @@ Key facts, all detailed in [build_notes.md](.claude/docs/build_notes.md):
   - **7–23 Mbit** → needs a K26-class part (yolov5n@416 W4A8 = 21 Mbit)
   - **> 23 Mbit** → ZU7EV/ZU9EG only, i.e. it does not ship
   Record the footprint of anything we train so we know what ports.
+  **The ×2 undercounts our own build ×1.8:** yolov8n-P3 W4A4 is 7.02 Mbit
+  theoretical → 14 Mbit by the rule, but the shipping bitstream uses **720
+  BRAM36 = 25.9 Mbit** (×3.7; FIFOs and line buffers are the rest). That is
+  above the K26's whole on-chip memory (144 BRAM36 = 5.1 Mbit + 64 URAM = 18
+  Mbit), so **the shipping net does not fit a K26 as built** — it needs URAM
+  mapping, smaller FIFOs, or a smaller net. Judge portability by the built
+  tile count, not the rule.
 - **Post-processing runs on the A53s for now — decided 2026-08-20.** The tracking
   and aim-output flow (README §11: seed, IoU cluster, WBF, Kalman, centring gate)
   is implemented in `deploy/track.py` and runs on Linux, next to the capture and
