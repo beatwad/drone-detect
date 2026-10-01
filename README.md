@@ -614,9 +614,10 @@ trigger, and until there is one, `dt` is only as good as the timestamp available
                               re-seed the filter from the last consecutive boxes
                               that agree with each other by thresh_frame_iou
                           close_enough = False, exit.
-6. Update        Kalman update -> smoothed centre -> offset from frame centre,
-                 and its magnitude `dist`.
-7. Centring gate hysteresis on `dist` (D_low / D_high) + debounce, DEBOUNCE_S seconds
+6. Update        Kalman update -> smoothed centre, extrapolated LEAD_S ahead
+                 along the velocity -> offset from frame centre; `dist` is its
+                 magnitude over half the box's short side.
+7. Centring gate hysteresis on `dist` (K_low / K_high) + debounce, DEBOUNCE_S seconds
                  -> close_enough.
 ```
 
@@ -634,9 +635,15 @@ Notes that are not in the sketch but follow from decisions already made:
   needs a predicted *box*, so size is carried too — as a plain EMA, since size has
   no useful dynamics here. Replace this first if measurement noise ever needs
   estimating rather than assuming.
-- **Distances are fractions of the frame diagonal**, not pixels — the unit aim
-  error is already reported in (`scripts/center_error.py`, 0.0139 for the
-  shipping model), so `D_low` / `D_high` can be read against existing numbers.
+- **The centring gate is relative to the target**, not the frame: `dist` = 1.0
+  puts the aim point on the edge of the box, whatever size the drone appears.
+  Whether a shot hits depends on where it lands on the drone. Until 2026-09-30
+  it was a fraction of the frame diagonal (0.010 / 0.020 = 3.7 / 7.5 px at
+  320x192), tighter than the detector's own mean centre error, 0.0139.
+- **The offset is led by `LEAD_S`**, 0.036 s: the measured median from driver
+  timestamp to aim. A drone at 10 m/s moves 36 cm in that time, more than its
+  own size. Exposure, actuator and projectile flight time belong in it too, once
+  known.
 - **Runs on the A53s under Linux — for the baseline only.** Nothing above needs
   the fabric: the tracking itself is ~10k operations per frame, microseconds
   either way. The point of the baseline is to prove the pipeline end to end, and
@@ -652,7 +659,7 @@ Notes that are not in the sketch but follow from decisions already made:
   the survivors — of order 1,000 `exp` calls. This is an operation count, not a
   measurement; the constant depends on the libm.
 - **Parameters unset.** `thresh_conf`, `thresh_iou`, `thresh_frame_iou`, `M`,
-  `D_low`, `D_high`, `N` all need measuring against real footage, which needs the
+  `K_low`, `K_high`, `LEAD_S`, `N` all need measuring against real footage, which needs the
   camera and the lens — open question 1.
 
 ---

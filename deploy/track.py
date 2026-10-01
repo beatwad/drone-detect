@@ -16,10 +16,14 @@ THREE CHOICES THE SPEC LEAVES OPEN
      needed too — but size has no useful dynamics here, so it is a plain EMA.
      If measurement noise ever needs to be estimated rather than assumed, this is
      the piece to replace.
-  2. **Distances are fractions of the frame diagonal**, not pixels. That is the
-     unit aim error is already reported in everywhere else in this project
-     (`scripts/center_error.py`, 0.0139 for the shipping model), so the centring
-     thresholds can be read against measurements that already exist.
+  2. **The centring gate is relative to the target, not the frame.** `dist` is
+     the aim offset as a fraction of half the box's short side: 1.0 puts the
+     aim point on the box edge, whatever size the drone appears. Whether a shot
+     hits depends on where it lands on the drone, so a fixed pixel or
+     frame-diagonal threshold is too strict on a near drone and too loose on a
+     far one. (Until 2026-09-30 it was a fraction of the frame diagonal,
+     0.010 / 0.020 — 3.7 / 7.5 px at 320x192, tighter than the detector's own
+     mean centre error.)
   3. **`dt` is passed in, never measured here.** The whole point of the camera
      trigger discussion is that the filter must advance from the *exposure*
      timestamp, not from when the frame happened to arrive. Handing this module a
@@ -46,15 +50,21 @@ IOU_GATE = 0.30        # measurement still agrees with the prediction
 MISS_S = 0.25          # gate failing this long (since the first miss) -> re-seed
 ALPHA, BETA = 0.6, 0.2  # alpha-beta gains: position, velocity
 SIZE_EMA = 0.5         # box size smoothing
-D_LOW, D_HIGH = 0.010, 0.020   # centring hysteresis, fraction of frame diagonal
+K_LOW, K_HIGH = 0.5, 1.0       # centring hysteresis, fraction of the box's half short side
+# The aim offset is extrapolated this far past the frame's timestamp along the
+# filter's velocity: the drone keeps moving while the frame is processed (10 m/s
+# for 36 ms is 36 cm, more than the drone). 0.036 s is only the part measured so
+# far — driver timestamp to aim, median, 2026-09-28; exposure, actuator and
+# projectile flight time are unknown and belong here once they are.
+LEAD_S = 0.036
 DEBOUNCE_S = 0.10      # a gate decision must hold this long before it flips
 
 
 class Aim(NamedTuple):
     """What the aiming subsystem gets. `offset` is None when there is no track."""
     close_enough: bool
-    offset: tuple    # (dx, dy) in pixels from frame centre, or None
-    dist: float      # |offset| as a fraction of the frame diagonal
+    offset: tuple    # (dx, dy) in pixels from frame centre, led by LEAD_S, or None
+    dist: float      # |offset| as a fraction of the box's half short side
     box: np.ndarray  # smoothed xyxy, or None
     tracking: bool   # the filter holds a track (may still be un-centred)
 
@@ -93,12 +103,12 @@ class AimTracker:
 
     def __init__(self, frame_wh, conf_thr=CONF_THR, iou_cluster=IOU_CLUSTER,
                  iou_gate=IOU_GATE, miss_s=MISS_S,
-                 d_low=D_LOW, d_high=D_HIGH, debounce_s=DEBOUNCE_S):
+                 k_low=K_LOW, k_high=K_HIGH, debounce_s=DEBOUNCE_S, lead_s=LEAD_S):
         self.w, self.h = frame_wh
         self.centre = np.array([self.w / 2.0, self.h / 2.0])
-        self.diag = float(np.hypot(self.w, self.h))
         self.conf_thr, self.iou_cluster, self.iou_gate = conf_thr, iou_cluster, iou_gate
-        self.miss_s, self.d_low, self.d_high, self.debounce_s = miss_s, d_low, d_high, debounce_s
+        self.miss_s, self.k_low, self.k_high, self.debounce_s = miss_s, k_low, k_high, debounce_s
+        self.lead_s = lead_s
         self._reset()
 
     def _reset(self):
@@ -113,11 +123,11 @@ class AimTracker:
     # ---- step 7: hysteresis + debounce ------------------------------------
     def _centring_gate(self, dist, dt):
         want = self.close_enough
-        if dist < self.d_low:
+        if dist < self.k_low:
             want = True
-        elif dist > self.d_high:
+        elif dist > self.k_high:
             want = False
-        # between D_low and D_high the flag holds — that is the hysteresis.
+        # between K_low and K_high the flag holds — that is the hysteresis.
         if want == self.close_enough:
             self._pending = None
         else:
@@ -182,8 +192,9 @@ class AimTracker:
             self.vel = self.vel + (BETA / dt) * resid
         self.size = (1 - SIZE_EMA) * self.size + SIZE_EMA * z_size
 
-        offset = self.pos - self.centre
-        dist = float(np.hypot(*offset)) / self.diag
+        # aim where the drone will be, and judge centring against its own size
+        offset = self.pos + self.vel * self.lead_s - self.centre
+        dist = float(np.hypot(*offset)) / max(float(self.size.min()) / 2.0, 1e-9)
         return Aim(self._centring_gate(dist, dt), (float(offset[0]), float(offset[1])),
                    dist, _box_from(self.pos, self.size), True)
 
