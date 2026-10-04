@@ -23,6 +23,7 @@ lands on the card.
 | `live.py` | the whole chain: camera → accelerator → `decode_packed` → tracker, one status line a second; `--led` lights DS50 (green, by SW19) while a frame holds a detection; `--button` lets SW19 start and stop detection |
 | `drone-detect.service` | systemd unit running `live.py --button` at boot; install steps in its header |
 | `pipeline.py` | up to K frames in the accelerator at once, results in order; used by `live.py` and `run_on_board.py` (`--depth`, default 3) |
+| `tput.py` | the accelerator alone: `execute_on_buffers()` at batch 1–32, prints latency and interval (`FCLK=187.5 python3 tput.py`) |
 | `pynq_offline/` | a pure-Python PYNQ 3.0.1 and its aarch64 wheels, so the board needs neither network nor compiler. See its README |
 | `boot/` | `BOOT.BIN`, `image.ub`, `boot.scr` for the FAT32 partition, `rootfs.tar.gz` for the ext4 one, and the `.xsa` the image was built from |
 | `petalinux/` | how that image is built, on the host |

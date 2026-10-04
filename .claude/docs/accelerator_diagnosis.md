@@ -60,29 +60,9 @@ where the remaining latency lives (build_notes §12.8).
 On the board (`ssh`/serial, as root), this reproduces the table above in a few
 seconds. It is deterministic. Run it before and after any fix:
 
-```python
-# /tmp/tput.py -- latency vs throughput of the PL alone.  FCLK=187.5 python3 /tmp/tput.py
-import os, sys, time
-sys.path.insert(0, "/home/root/deploy")
-os.environ.setdefault("XILINX_XRT", "/usr")
-os.makedirs("/lib/firmware", exist_ok=True)
-from pynq.pl_server.device import Device
-from driver_base import FINNExampleOverlay
-from run_on_board import io_shape_dict
-
-for b in (1, 2, 4, 8, 16, 32):
-    acc = FINNExampleOverlay(bitfile_name="/home/root/deploy/resizer.bit", platform="zynq-iodma",
-                             io_shape_dict=io_shape_dict, batch_size=b,
-                             runtime_weight_dir="/home/root/deploy/runtime_weights/",
-                             device=Device.devices[0], fclk_mhz=float(os.environ.get("FCLK", "187.5")))
-    t = []
-    for _ in range(5):
-        t0 = time.perf_counter(); acc.execute_on_buffers(); t.append(time.perf_counter() - t0)
-    t = sorted(t)[2]
-    from pynq.ps import Clocks
-    print(f"batch {b:3d}: {t*1e3:8.2f} ms total, {t*1e3/b:6.2f} ms/frame, {b/t:6.1f} FPS"
-          f"  @ {Clocks.fclk0_mhz:.2f} MHz", flush=True)
-```
+`deploy/tput.py` (it was a snippet here): stop `drone-detect.service`, then
+`FCLK=187.5 python3 /home/root/deploy/tput.py`. It prints the table above and
+the fitted latency and interval.
 
 A fixed bitstream is green when batch 32 approaches ~11 ms/frame (or whatever
 the corrected estimate says, see H1). Keep `run_on_board.py` passing too — a

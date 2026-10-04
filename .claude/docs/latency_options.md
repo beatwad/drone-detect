@@ -23,6 +23,11 @@ frames, ms (build_notes §12.12):
 | | **age at aim** | **37.26** | 40.80 | 43.02 | 46.76 |
 | | aim gap (time between aims) | 8.64 | 14.83 | 16.78 | 19.97 |
 
+**The rows are not additive:** "in PL" (5) is timed from just before
+`pipe.submit()` to the poll that finds the output, so it already contains
+submit (4). Age at aim = 1 + 2 + 3 + 5 + 6 + 7 per frame (`live.py`); the
+medians only add up approximately.
+
 35.8 ms on an empty scene; 0 of 70,000 frames over 60 ms; ~111–116 FPS.
 **Exposure is not in these numbers** — the driver stamps the first USB packet,
 after exposure (§12.9) — so glass-to-aim = exposure + age at aim.
