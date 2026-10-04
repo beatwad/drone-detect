@@ -24,6 +24,7 @@ kaggle.json
 .DS_Store
 *.log
 *.cache
+/paper/
 
 # --- board artifacts over the 50 MB commit cap ---
 # rootfs.tar.gz is needed to write a card and is kept in the tree. The PYNQ
